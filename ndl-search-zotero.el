@@ -144,17 +144,28 @@ typically used to infer surname and given name from a full name."
     (list :publisher (map-elt it "出版社")
           :place (map-elt it "所在地"))))
 
+(defun ndl-search-zotero--normalize-string (str)
+  "Normalize string STR."
+  (mapcar (lambda (from-to)
+            (setq str (string-replace (car from-to) (cdr from-to) str)))
+          '(("　" . " ") ("!" . "！") ("?" . "？")))
+  str)
+
 (defun ndl-search-zotero--json-title (title &optional series-title)
   "Render TITLE and SERIES-TITLE as :title and :shortTitle."
-  (let* ((parts (string-split title "[:：]+" 'omit-empty "\\s-+"))
+  (let* ((title (ndl-search-zotero--normalize-string title))
+         (parts (string-split title "[:：]+" 'omit-empty "\\s-+"))
          (short-title (car parts))
          (title (string-join parts " ")))
-    (append (list :title (concat title
-                                 (if series-title
-                                     (concat " （" series-title "）")
-                                   "")))
-            (when (< (length short-title) (length title))
-              (list :shortTitle short-title)))))
+    (append
+     (list :title
+           (concat title
+                   (if-let* ((s (and series-title
+                                     (ndl-search-zotero--normalize-string series-title))))
+                       (concat " （" s "）")
+                     "")))
+     (when (< (length short-title) (length title))
+       (list :shortTitle short-title)))))
 
 (defun ndl-search-zotero--json-creators (creators series-creators &optional creator-indices)
   "Render CREATORS and SERIES-CREATORS as :creators.
