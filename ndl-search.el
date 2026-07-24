@@ -177,67 +177,111 @@ The bib item URL should have a path '/books/<id>'."
             (list (list (cons "氏名" s))))))
       (dom-by-tag node 'span)))))
 
+(defmacro ndl-search--when-text-match (pattern &rest body)
+  "Evaluate BODY when PATTERN matches the current text node."
+  (declare (indent 1))
+  `(when-let* ((s (nth node-index nodes))
+               (_ (and (stringp s) (string-match ,pattern s))))
+     (setq node-index (1+ node-index)
+           result (apply #'append (list result (progn ,@body))))))
+
+(defmacro ndl-search--when-inner-text-match (tag pattern &rest body)
+  "Evaluate BODY when PATTERN matches the inner text of current TAG."
+  (declare (indent 2))
+  `(when-let* ((n (nth node-index nodes))
+               (_ (and (consp n) (eq (car n) ,tag)))
+               (s (dom-inner-text n))
+               (_ (string-match ,pattern s)))
+     (setq node-index (1+ node-index)
+           result (apply #'append (list result (progn ,@body))))))
+
+(defun ndl-search--process-index (span)
+  "Process indexed item under the SPAN node."
+  (let* ((re-epoch "B\\. ?C\\.?\\|A\\. ?D\\.?")
+         (re-year "[0-9]\\{1,4\\}")
+         (re-person-name "\\([^ ,]+\\)\\(, +\\([^ ,]+?\\)\\)?")
+         (re-person-yomi "\\(\\(\\cK\\|[a-zA-Z ]\\)+\\)\\(, +\\(\\(\\cK+\\|[a-zA-Z ]\\)+\\)\\)?")
+         (re-entity-id "[0-9]+")
+         (re-yob-yod (concat ", +"
+                             "\\(" re-year "\\)" "\\(" re-epoch "\\)?" "-"
+                             "\\(" re-year "\\|.+?\\)?" "\\(" re-epoch "\\)?"))
+         (nodes (seq-keep (lambda (it)
+                            (when (or (stringp it)
+                                      (and (consp it) (eq (car it) 'a)))
+                              it))
+                          (dom-children span))))
+    (or
+     ;; Person
+     (let ((result '(nil)) (node-index 0))
+       (and
+        (or (ndl-search--when-text-match "\\`\\(?2:[^ ：:]+?\\) *[：:] *\\'"
+              (let ((role (match-string 2 s)))
+                (append (when role (list (cons "区分" role))))))
+            t)
+        (ndl-search--when-inner-text-match
+            'a (concat "\\`\\(?3:" re-person-name "\\)"
+                       "\\(?8:" re-yob-yod "\\)\\'")
+          (let ((surname (match-string 4 s))
+                (given-name (match-string 6 s))
+                (yob (match-string 9 s))
+                (yob-epoch (match-string 10 s))
+                (yod (match-string 11 s))
+                (yod-epoch (match-string 12 s)))
+            (append (if (and surname given-name)
+                        `(("氏" . ,surname) ("名" . ,given-name))
+                      `(("氏名" . ,surname)))
+                    (when yob
+                      `(("生年" . ,(if yob-epoch (concat yob " " yob-epoch) yob))))
+                    (when yod
+                      `(("没年" . ,(if yod-epoch (concat yod " " yod-epoch) yod)))))))
+        (or (ndl-search--when-text-match
+                (concat "\\` *\\(?1:" re-person-yomi "\\)"
+                        "\\(?:" re-yob-yod "\\)\\'")
+              (let ((surname-yomi (match-string 2 s))
+                    (given-name-yomi (match-string 5 s)))
+                (append (if (and surname-yomi given-name-yomi)
+                            `(("氏／ヨミ" . ,surname-yomi)
+                              ("名／ヨミ" . ,given-name-yomi))
+                          `(("氏名／ヨミ" . ,surname-yomi))))))
+            t)
+        (ndl-search--when-text-match " ( ")
+        (ndl-search--when-inner-text-match
+            'a (concat "\\(?1:" re-entity-id "\\)")
+          `(("ID" . ,(match-string 1 s))))
+        (ndl-search--when-text-match " )")
+        (cdr result)))
+     ;; Topic Term
+     (let ((re-topic-name "[^ ]+")
+           (re-topic-yomi "\\(\\cK\\|[a-zA-Z ]\\)+")
+           (result '(nil)) (node-index 0))
+       (and
+        (ndl-search--when-inner-text-match
+            'a (concat "\\(?1:" re-topic-name "\\)")
+          (let ((topic-name (match-string 1 s)))
+            (append `(("件名" . ,topic-name)))))
+        (or (ndl-search--when-text-match
+                (concat "\\` *\\(?1:" re-topic-yomi "\\)")
+              (let ((topic-yomi (match-string 1 s)))
+                (append `(("件名／ヨミ" . ,topic-yomi)))))
+            (cdr result))
+        (ndl-search--when-text-match " ( ")
+        (ndl-search--when-inner-text-match
+            'a (concat "\\(?1:" re-entity-id "\\)")
+          `(("ID" . ,(match-string 1 s))))
+        (ndl-search--when-text-match " )")
+        (cdr result))))))
+
 (defun ndl-search--process-creator-indices (node)
   "Process NODE ('dd') as creator indices alist."
-  (let ((pattern
-         (concat
-          "\\` *"
-          "\\(\\(?18:[^ ：:]+\\) *[：:] *\\)?"
-          "\\(\\(?2:[^ ,]+\\)\\(, *\\(?4:[^ ,]+\\)\\)?\\)" ; surname, given name
-          "\\(, *\\(\\(?6:[0-9]+\\)-\\(?7:[0-9]+\\|.+?\\)?\\|.+?\\)\\)?" ; year-of-birth, year-of-death
-          "\\( +\\(?9:\\(\\cK\\|[a-zA-Z]\\)+\\)\\(, *\\(?11:\\cK+\\)\\)?\\)?"
-          "\\(, *\\(\\([0-9]+\\)-\\([0-9]+\\|.+\\)?\\|.+\\)\\)?"
-          "\\( +( *\\(?16:[0-9]+\\) *)\\)?.*" ; entity-id
-          "\\'")))
-    (mapcar
-     (lambda (span)
-       (let ((s (dom-inner-text span)))
-         (when (string-match pattern s)
-           (let ((role (match-string 18 s))
-                 (surname (match-string 2 s))
-                 (given-name (match-string 4 s))
-                 (yob (match-string 6 s))
-                 (yod (match-string 7 s))
-                 (surname-kana (match-string 9 s))
-                 (given-name-kana (match-string 11 s))
-                 (entity-id (match-string 16 s)))
-             (append
-              (when role (list (cons "区分" role)))
-              (progn
-                (when-let* ((_ (and surname (null given-name)
-                                    (string-match ".+\\( +\\).+" surname)))
-                            (sn (substring surname 0 (match-beginning 1)))
-                            (gn (substring surname (match-end 1))))
-                  (setq surname sn
-                        given-name gn))
-                (list (cons "氏" surname)
-                      (cons "名" given-name)))
-              (when yob (list (cons "生年" yob)))
-              (when yod (list (cons "没年" yod)))
-              (when surname-kana (list (cons "ヨミカタ／氏" surname-kana)))
-              (when given-name-kana (list (cons "ヨミカタ／名" given-name-kana)))
-              (when entity-id (list (cons "ID" entity-id))))))))
-     (dom-by-tag node 'span))))
+  (mapcar (lambda (span)
+            (ndl-search--process-index span))
+          (dom-by-tag node 'span)))
 
 (defun ndl-search--process-topic-term-indices (node)
   "Process NODE ('dd') as topic term indices alist."
-  (let ((pattern (concat "\\` *"
-                         "\\(?1:[^ ]+\\)"    ; topic term
-                         "\\( +\\(?3:\\cK+\\)\\)?" ; yomikata
-                         "\\( +( *\\(?6:[0-9]+\\) *)\\)?" ; entity-id
-                         ".*\\'")))
-    (mapcar
-     (lambda (span)
-       (let ((s (dom-inner-text span)))
-         (when (string-match pattern s)
-           (let ((topic-term (match-string 1 s))
-                 (yomikata (match-string 3 s))
-                 (entity-id (match-string 6 s)))
-             (append
-              (when topic-term (list (cons "件名" topic-term)))
-              (when yomikata (list (cons "ヨミカタ" yomikata)))
-              (when entity-id (list (cons "ID" entity-id))))))))
-     (dom-by-tag node 'span))))
+  (mapcar (lambda (span)
+            (ndl-search--process-index span))
+          (dom-by-tag node 'span)))
 
 (defun ndl-search--process-publication-date (node)
   "Process NODE ('dd') as publication date."
