@@ -143,7 +143,8 @@ The bib item URL should have a path '/books/<id>'."
         (progn
           (push (cons "ndl:url" url) bib-item)
           (pp bib-item))
-      (message "No bib item extracted from %s" url))
+      (when ndl-search-debug
+        (message "No bib item extracted from %s" url)))
     bib-item))
 
 (defun ndl-search--process-creators (node)
@@ -382,6 +383,7 @@ The bib item URL should have a path '/books/<id>'."
            (url-request-data nil)
            (url-request-extra-headers nil)
            (url-automatic-caching t)
+           ;; TODO: Use `url-retrieve' for asynchronous callbacks:
            (response-buffer (url-retrieve-synchronously url)))
       (unless response-buffer
         (error "Response not received from %s" url))
@@ -481,6 +483,7 @@ DPID maps to the query parameter 'ndl_dpid'."
                      (query-params (when raw-query
                                      (url-parse-query-string raw-query))))
           (message "Extracted %d item(s) from '%s'" (length items) resolved-url)
+          (redisplay)
           (when items
             (setq all-items (append all-items items))
             (unless (<= ndl-search-max-items (length all-items))
@@ -520,7 +523,7 @@ DPID maps to the query parameter 'ndl_dpid'."
                    (list (propertize " " 'display `(space :align-to ,col))
                          text))))))
     (let-alist item-alist
-      (let* ((width (window-body-width (minibuffer-window)))
+      (let* ((width (frame-width)) ; used to be `window-body-width' of `minibuffer-window'
              (prefix
               (concat (s-align (or .categories "") 9 'right)))
              (completion

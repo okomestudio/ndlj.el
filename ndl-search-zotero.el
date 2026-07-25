@@ -159,15 +159,14 @@ typically used to infer surname and given name from a full name."
 
 (defun ndl-search-zotero--normalize-string (str)
   "Normalize string STR."
-  (mapcar (lambda (from-to)
-            (setq str (string-replace (car from-to) (cdr from-to) str)))
-          '(("　" . " ")
-            ("!" . "！")
-            ("?" . "？")
-            ("(" . "（")
-            (")" . "）")
-            ("[" . "［")
-            ("]" . "］")))
+  (pcase-dolist (`(,from . ,to) '(("　" . " ")
+                                  ("!" . "！")
+                                  ("?" . "？")
+                                  ("(" . "（")
+                                  (")" . "）")
+                                  ("[" . "［")
+                                  ("]" . "］")))
+    (setq str (string-replace from-to from-to str)))
   str)
 
 (defun ndl-search-zotero--json-title (title &optional series-title)
@@ -221,10 +220,7 @@ When given, CREATOR-INDICES holds creator index (著者標目) entries."
                      :firstName (map-elt creator "名")))))
           (append creators
                   (mapcar (lambda (it)
-                            (push (cons "シリーズ") it)
-                            ;; (setf (map-elt it "区分")
-                            ;;       (concat "シリーズ" (map-elt it "区分")))
-                            it)
+                            (cons '("シリーズ" .  t) it))
                           series-creators))))))
 
 (defun ndl-search-zotero--json-date (date)
