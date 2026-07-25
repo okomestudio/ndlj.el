@@ -124,26 +124,29 @@ typically used to infer surname and given name from a full name."
          (mapcar
           (lambda (tag) (list :tag tag))
           (seq-uniq
-           (flatten-list
-            (list
-             (mapcar
-              (lambda (s)
-                (when-let*
-                    ((_ (string-match "\\`.*: *\\(?1:.+\\)\\'" s))
-                     (terms (string-split (match-string 1 s)
-                                          "\\([．]\\|--\\)" t "\\s-+")))
-                  terms))
-              ndc-categories)
-             (mapcar
-              (lambda (it)
-                (cond
-                 ((map-elt it "氏名")
-                  (map-elt it "氏名"))
-                 ((and (map-elt it "氏") (map-elt it "名"))
-                  (concat (map-elt it "氏") " " (map-elt it "名")))
-                 (t
-                  (string-split (map-elt it "件名") "--" 'omit-empty "\\s-+"))))
-              topic-term-indices))))))))
+           (mapcar
+            (lambda (tag)
+              (ndl-search-zotero--normalize-string tag))
+            (flatten-list
+             (list
+              (mapcar
+               (lambda (s)
+                 (when-let*
+                     ((_ (string-match "\\`.*: *\\(?1:.+\\)\\'" s))
+                      (terms (string-split (match-string 1 s)
+                                           "\\([．]\\|--\\)" t "\\s-+")))
+                   terms))
+               ndc-categories)
+              (mapcar
+               (lambda (it)
+                 (cond
+                  ((map-elt it "氏名")
+                   (map-elt it "氏名"))
+                  ((and (map-elt it "氏") (map-elt it "名"))
+                   (concat (map-elt it "氏") " " (map-elt it "名")))
+                  (t
+                   (string-split (map-elt it "件名") "--" 'omit-empty "\\s-+"))))
+               topic-term-indices)))))))))
 
 (defun ndl-search-zotero--json-publisher (publisher-items)
   "Render PUBLISHER-ITEMS as :publisher and :place."
@@ -158,7 +161,13 @@ typically used to infer surname and given name from a full name."
   "Normalize string STR."
   (mapcar (lambda (from-to)
             (setq str (string-replace (car from-to) (cdr from-to) str)))
-          '(("　" . " ") ("!" . "！") ("?" . "？")))
+          '(("　" . " ")
+            ("!" . "！")
+            ("?" . "？")
+            ("(" . "（")
+            (")" . "）")
+            ("[" . "［")
+            ("]" . "］")))
   str)
 
 (defun ndl-search-zotero--json-title (title &optional series-title)

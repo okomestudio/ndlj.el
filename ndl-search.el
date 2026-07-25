@@ -151,7 +151,7 @@ The bib item URL should have a path '/books/<id>'."
   (let ((pattern
          (concat "\\`"
                  "\\(?1:.*?\\)"
-                 (format "\\( +\\(?3:%s\\)\\)?" ndl-search--regexp-roles)
+                 (format "\\( +\\[?\\(?3:%s\\)\\]?\\)?" ndl-search--regexp-roles)
                  "\\'")))
     (apply
      #'append
@@ -199,8 +199,8 @@ The bib item URL should have a path '/books/<id>'."
   "Process indexed item under the SPAN node."
   (let* ((re-epoch "B\\. ?C\\.?\\|A\\. ?D\\.?")
          (re-year "[0-9]\\{1,4\\}")
-         (re-person-name "\\([^ ,]+\\)\\(, +\\([^ ,]+?\\)\\)?")
-         (re-person-yomi "\\(\\(\\cK\\|[a-zA-Z ]\\)+\\)\\(, +\\(\\(\\cK+\\|[a-zA-Z ]\\)+\\)\\)?")
+         (re-person-name "\\([^ ,]+\\)\\(, +\\([^ ,]+?\\)\\)")
+         (re-person-yomi "\\(\\(\\cK\\|[0-9a-zA-Z ]\\)+\\)\\(, +\\(\\(\\cK+\\|[0-9a-zA-Z ]\\)+\\)\\)")
          (re-entity-id "[0-9]+")
          (re-yob-yod (concat ", +"
                              "\\(" re-year "\\)" "\\(" re-epoch "\\)?" "-"
@@ -218,32 +218,45 @@ The bib item URL should have a path '/books/<id>'."
               (let ((role (match-string 2 s)))
                 (append (when role (list (cons "区分" role))))))
             t)
-        (ndl-search--when-inner-text-match
-            'a (concat "\\`\\(?3:" re-person-name "\\)"
-                       "\\(?8:" re-yob-yod "\\)\\'")
-          (let ((surname (match-string 4 s))
-                (given-name (match-string 6 s))
-                (yob (match-string 9 s))
-                (yob-epoch (match-string 10 s))
-                (yod (match-string 11 s))
-                (yod-epoch (match-string 12 s)))
-            (append (if (and surname given-name)
-                        `(("氏" . ,surname) ("名" . ,given-name))
-                      `(("氏名" . ,surname)))
-                    (when yob
-                      `(("生年" . ,(if yob-epoch (concat yob " " yob-epoch) yob))))
-                    (when yod
-                      `(("没年" . ,(if yod-epoch (concat yod " " yod-epoch) yod)))))))
-        (or (ndl-search--when-text-match
-                (concat "\\` *\\(?1:" re-person-yomi "\\)"
-                        "\\(?:" re-yob-yod "\\)\\'")
-              (let ((surname-yomi (match-string 2 s))
-                    (given-name-yomi (match-string 5 s)))
-                (append (if (and surname-yomi given-name-yomi)
-                            `(("氏／ヨミ" . ,surname-yomi)
-                              ("名／ヨミ" . ,given-name-yomi))
-                          `(("氏名／ヨミ" . ,surname-yomi))))))
-            t)
+        (or (ndl-search--when-inner-text-match
+                'a (concat "\\`\\(?3:" re-person-name "?\\)"
+                           "\\(?8:" re-yob-yod "\\)\\'")
+              ;; Rely on the presence of year-of-birth/death.
+              (let ((surname (match-string 4 s))
+                    (given-name (match-string 6 s))
+                    (yob (match-string 9 s))
+                    (yob-epoch (match-string 10 s))
+                    (yod (match-string 11 s))
+                    (yod-epoch (match-string 12 s)))
+                (append (if (and surname given-name)
+                            `(("氏" . ,surname) ("名" . ,given-name))
+                          `(("氏名" . ,surname)))
+                        (when yob
+                          `(("生年" . ,(if yob-epoch (concat yob " " yob-epoch) yob))))
+                        (when yod
+                          `(("没年" . ,(if yod-epoch (concat yod " " yod-epoch) yod)))))))
+            (ndl-search--when-inner-text-match
+                'a (concat "\\`\\(?3:" re-person-name "\\)\\'")
+              ;; Rely on the comma for surname/given name.
+              (let ((surname (match-string 4 s))
+                    (given-name (match-string 6 s)))
+                `(("氏" . ,surname) ("名" . ,given-name)))))
+        (or (or (ndl-search--when-text-match
+                    (concat "\\` *\\(?1:" re-person-yomi "?\\)"
+                            "\\(?:" re-yob-yod "\\)\\'")
+                  (let ((surname-yomi (match-string 2 s))
+                        (given-name-yomi (match-string 5 s)))
+                    (append (if (and surname-yomi given-name-yomi)
+                                `(("氏／ヨミ" . ,surname-yomi)
+                                  ("名／ヨミ" . ,given-name-yomi))
+                              `(("氏名／ヨミ" . ,surname-yomi))))))
+                (ndl-search--when-text-match
+                    (concat "\\` *\\(?1:" re-person-yomi "\\)\\'")
+                  (let ((surname-yomi (match-string 2 s))
+                        (given-name-yomi (match-string 5 s)))
+                    `(("氏／ヨミ" . ,surname-yomi)
+                      ("名／ヨミ" . ,given-name-yomi)))))
+            t)                ; this node may not exist if yomikata is missing
         (ndl-search--when-text-match " ( ")
         (ndl-search--when-inner-text-match
             'a (concat "\\(?1:" re-entity-id "\\)")
@@ -252,7 +265,7 @@ The bib item URL should have a path '/books/<id>'."
         (cdr result)))
      ;; Topic Term
      (let ((re-topic-name "[^ ]+")
-           (re-topic-yomi "\\(\\cK\\|[a-zA-Z ]\\)+")
+           (re-topic-yomi "\\(\\cK\\|[0-9a-zA-Z ]\\)+")
            (result '(nil)) (node-index 0))
        (and
         (ndl-search--when-inner-text-match
@@ -269,6 +282,15 @@ The bib item URL should have a path '/books/<id>'."
             'a (concat "\\(?1:" re-entity-id "\\)")
           `(("ID" . ,(match-string 1 s))))
         (ndl-search--when-text-match " )")
+        (cdr result)))
+     ;; Topic Term without ID
+     (let ((re-topic-name ".+")
+           (result '(nil)) (node-index 0))
+       (and
+        (ndl-search--when-inner-text-match
+            'a (concat "\\(?1:" re-topic-name "\\)")
+          (let ((topic-name (match-string 1 s)))
+            (append `(("件名" . ,topic-name)))))
         (cdr result))))))
 
 (defun ndl-search--process-creator-indices (node)
@@ -623,6 +645,13 @@ Invoke this command with a prefix argument to switch data providers."
 Invoke this command with a prefix argument to switch data providers."
   (interactive "sNDL search (title): ")
   (ndl-search-query--command :title query))
+
+;;;###autoload
+(defun ndl-search-visit (query)
+  "Visit the item web page from QUERY."
+  (interactive "sNDL search (any): ")
+  (when-let* ((url (map-elt (ndl-search-query--command :any query) "ndl:url")))
+    (browse-url url)))
 
 ;; Utilities
 
