@@ -29,13 +29,10 @@
 (require 'dom)
 (require 'map)
 (require 'seq)
-(require 'url)
-;; (require 'url-expand)
+(require 'time-date)
 (require 'url-parse)
-(require 'url-util)
-;; (require 'xml)
 
-;; (require 's)
+(require 'ndlj-api)
 (require 'ndlj-util)
 
 (defcustom ndlj-openurl-max-items 400
@@ -51,78 +48,29 @@
                 (integer :tag "Jitter in seconds")))
   :group 'ndlj)
 
-(defconst ndlj-openurl--field-processors
-  '(("出版事項" . ndlj-openurl--process-publisher)
-    ("出版事項（掲載誌）" . ndlj-openurl--process-publisher)
-    ("出版年月日等" . ndlj-openurl--process-publication-date)
-    ("出版年（W3CDTF）" . ndlj-openurl--process-publication-year)
-    ("数量" . ndlj-openurl--process-quantity)
-    ("著者・編者" . ndlj-openurl--process-creators)
-    ("シリーズ著者・編者" . ndlj-openurl--process-creators)
-    ("著者標目" . ndlj-openurl--process-creator-indices)
-    ("件名標目" . ndlj-openurl--process-topic-term-indices)
-    ("書誌ID（NDLBibID）" . ndlj-openurl--process-ndl-bib-id)))
+(defconst ndlj-openurl--field-extractors
+  '(("出版事項" . ndlj-openurl--extract-publisher)
+    ("出版事項（掲載誌）" . ndlj-openurl--extract-publisher)
+    ("出版年月日等" . ndlj-openurl--extract-publication-date)
+    ("出版年（W3CDTF）" . ndlj-openurl--extract-publication-year)
+    ("数量" . ndlj-openurl--extract-quantity)
+    ("著者・編者" . ndlj-openurl--extract-creators)
+    ("シリーズ著者・編者" . ndlj-openurl--extract-creators)
+    ("著者標目" . ndlj-openurl--extract-creator-indices)
+    ("件名標目" . ndlj-openurl--extract-topic-term-indices)
+    ("書誌ID（NDLBibID）" . ndlj-openurl--extract-ndl-bib-id)))
+
+(defconst ndlj-openurl-hostname "ndlsearch.ndl.go.jp")
+(defconst ndlj-openurl-api-path "/api/openurl")
 
 ;;; Bibilography Item
 
-(defun ndlj-openurl-bib-item-get (url)
-  "Get bib item as an alist from URL.
-The bib item URL should have a path '/books/<id>'."
-  (let ((url-automatic-caching t)
-        bib-item)
-    (with-current-buffer (url-retrieve-synchronously url)
-      (goto-char (point-min))
-      (search-forward "\n\n" nil t)
-      (when-let* ((dom (libxml-parse-html-region (point) (point-max))))
-        (mapcar
-         (lambda (node)
-           (when-let*
-               ((field (dom-inner-text (dom-by-tag node 'dt)))
-                (value (if-let* ((proc (map-elt ndlj-openurl--field-processors field)))
-                           (funcall proc (car (dom-by-tag node 'dd)))
-                         (dom-inner-text (dom-by-tag node 'dd)))))
-             (push (cons field value) bib-item)))
-         (dom-by-class
-          (car (dom-by-class dom "pages-books-section-bib-list"))
-          "pages-books-ndls-section-bib-list-item"))))
-    (if bib-item
-        (progn
-          (push (cons "ndl:url" url) bib-item)
-          (pp bib-item))
-      (when ndlj-debug
-        (message "No bib item extracted from %s" url)))
-    bib-item))
-
-(defun ndlj-openurl--process-creators (node)
+(defun ndlj-openurl--extract-creators (node)
   "Process NODE ('dd') as author/editor/contributer info alist."
-  (let ((pattern
-         (concat "\\`"
-                 "\\(?1:.*?\\)"
-                 (format "\\( +\\[?\\(?3:%s\\)\\]?\\)?" ndlj--regexp-roles)
-                 "\\'")))
-    (apply
-     #'append
-     (mapcar
-      (lambda (span)
-        (let ((s (dom-inner-text span)))
-          (if (string-match pattern s)
-              (let ((role (match-string 3 s))
-                    (names (string-split (match-string 1 s) ", ")))
-                (mapcar
-                 (lambda (name)
-                   (append
-                    (when role `(("区分" . ,role)))
-                    (if-let* ((_ (string-match "\\(?1:[^ ]+\\)\\s-+\\(?2:[^ ]+\\)"
-                                               name))
-                              (surname (match-string 1 name))
-                              (given-name (match-string 2 name)))
-                        `(("氏" . ,surname)
-                          ("名" . ,given-name))
-                      (when name `(("氏名" . ,name))))))
-                 names))
-            (ndlj-message "Unparsable (creators): '%s'" s)
-            (list `(("氏名" . ,s))))))
-      (dom-by-tag node 'span)))))
+  (apply #'append
+         (mapcar (lambda (span)
+                   (ndlj-api-parse-creator (dom-inner-text span)))
+                 (dom-by-tag node 'span))))
 
 (defmacro ndlj-openurl--when-text-match (pattern &rest body)
   "Evaluate BODY when PATTERN matches the current text node."
@@ -142,7 +90,7 @@ The bib item URL should have a path '/books/<id>'."
      (setq node-index (1+ node-index)
            result (apply #'append (list result (progn ,@body))))))
 
-(defun ndlj-openurl--process-index (span)
+(defun ndlj-openurl--extract-index (span)
   "Process indexed item under the SPAN node."
   (let* ((re-epoch "B\\. ?C\\.?\\|A\\. ?D\\.?")
          (re-year "[0-9]\\{1,4\\}")
@@ -162,52 +110,52 @@ The bib item URL should have a path '/books/<id>'."
      (let ((result '(nil)) (node-index 0))
        (and
         (or (ndlj-openurl--when-text-match "\\`\\(?2:[^ ：:]+?\\) *[：:] *\\'"
-                                           (let ((role (match-string 2 s)))
-                                             (append (when role `(("区分" . ,role))))))
+              (let ((role (match-string 2 s)))
+                (append (when role `((role . ,role))))))
             t)
         (or (ndlj-openurl--when-inner-text-match
-             'a (concat "\\`\\(?3:" re-person-name "?\\)"
-                        "\\(?8:" re-yob-yod "\\)\\'")
-             ;; Rely on the presence of year-of-birth/death.
-             (let ((surname (match-string 4 s))
-                   (given-name (match-string 6 s))
-                   (yob (match-string 9 s))
-                   (yob-epoch (match-string 10 s))
-                   (yod (match-string 11 s))
-                   (yod-epoch (match-string 12 s)))
-               (append (if (and surname given-name)
-                           `(("氏" . ,surname) ("名" . ,given-name))
-                         `(("氏名" . ,surname)))
-                       (when yob
-                         `(("生年" . ,(if yob-epoch (concat yob " " yob-epoch) yob))))
-                       (when yod
-                         `(("没年" . ,(if yod-epoch (concat yod " " yod-epoch) yod)))))))
+                'a (concat "\\`\\(?3:" re-person-name "?\\)"
+                           "\\(?8:" re-yob-yod "\\)\\'")
+              ;; Rely on the presence of year-of-birth/death.
+              (let ((surname (match-string 4 s))
+                    (given-name (match-string 6 s))
+                    (yob (match-string 9 s))
+                    (yob-epoch (match-string 10 s))
+                    (yod (match-string 11 s))
+                    (yod-epoch (match-string 12 s)))
+                (append (if (and surname given-name)
+                            `((surname . ,surname) (given-name . ,given-name))
+                          `((fullname . ,surname)))
+                        (when yob
+                          `((yob . ,(if yob-epoch (concat yob " " yob-epoch) yob))))
+                        (when yod
+                          `((yod . ,(if yod-epoch (concat yod " " yod-epoch) yod)))))))
             (ndlj-openurl--when-inner-text-match
-             'a (concat "\\`\\(?3:" re-person-name "\\)\\'")
-             ;; Rely on the comma for surname/given name.
-             (let ((surname (match-string 4 s))
-                   (given-name (match-string 6 s)))
-               `(("氏" . ,surname) ("名" . ,given-name)))))
+                'a (concat "\\`\\(?3:" re-person-name "\\)\\'")
+              ;; Rely on the comma for surname/given name.
+              (let ((surname (match-string 4 s))
+                    (given-name (match-string 6 s)))
+                `((surname . ,surname) (given-name . ,given-name)))))
         (or (or (ndlj-openurl--when-text-match
-                 (concat "\\` *\\(?1:" re-person-yomi "?\\)"
-                         "\\(?:" re-yob-yod "\\)\\'")
-                 (let ((surname-yomi (match-string 2 s))
-                       (given-name-yomi (match-string 5 s)))
-                   (append (if (and surname-yomi given-name-yomi)
-                               `(("氏／ヨミ" . ,surname-yomi)
-                                 ("名／ヨミ" . ,given-name-yomi))
-                             `(("氏名／ヨミ" . ,surname-yomi))))))
+                    (concat "\\` *\\(?1:" re-person-yomi "?\\)"
+                            "\\(?:" re-yob-yod "\\)\\'")
+                  (let ((surname-yomi (match-string 2 s))
+                        (given-name-yomi (match-string 5 s)))
+                    (append (if (and surname-yomi given-name-yomi)
+                                `((surname-yomi . ,surname-yomi)
+                                  (given-name-yomi . ,given-name-yomi))
+                              `((fullname-yomi . ,surname-yomi))))))
                 (ndlj-openurl--when-text-match
-                 (concat "\\` *\\(?1:" re-person-yomi "\\)\\'")
-                 (let ((surname-yomi (match-string 2 s))
-                       (given-name-yomi (match-string 5 s)))
-                   `(("氏／ヨミ" . ,surname-yomi)
-                     ("名／ヨミ" . ,given-name-yomi)))))
+                    (concat "\\` *\\(?1:" re-person-yomi "\\)\\'")
+                  (let ((surname-yomi (match-string 2 s))
+                        (given-name-yomi (match-string 5 s)))
+                    `((surname-yomi . ,surname-yomi)
+                      (given-name-yomi . ,given-name-yomi)))))
             t)                ; this node may not exist if yomikata is missing
         (ndlj-openurl--when-text-match " ( ")
         (ndlj-openurl--when-inner-text-match
-         'a (concat "\\(?1:" re-entity-id "\\)")
-         `(("ID" . ,(match-string 1 s))))
+            'a (concat "\\(?1:" re-entity-id "\\)")
+          `(("ID" . ,(match-string 1 s))))
         (ndlj-openurl--when-text-match " )")
         (cdr result)))
      ;; Topic Term
@@ -216,18 +164,18 @@ The bib item URL should have a path '/books/<id>'."
            (result '(nil)) (node-index 0))
        (and
         (ndlj-openurl--when-inner-text-match
-         'a (concat "\\(?1:" re-topic-name "\\)")
-         (let ((topic-name (match-string 1 s)))
-           (append `(("件名" . ,topic-name)))))
+            'a (concat "\\(?1:" re-topic-name "\\)")
+          (let ((topic-name (match-string 1 s)))
+            (append `(("件名" . ,topic-name)))))
         (or (ndlj-openurl--when-text-match
-             (concat "\\` *\\(?1:" re-topic-yomi "\\)")
-             (let ((topic-yomi (match-string 1 s)))
-               (append `(("件名／ヨミ" . ,topic-yomi)))))
+                (concat "\\` *\\(?1:" re-topic-yomi "\\)")
+              (let ((topic-yomi (match-string 1 s)))
+                (append `(("件名／ヨミ" . ,topic-yomi)))))
             (cdr result))
         (ndlj-openurl--when-text-match " ( ")
         (ndlj-openurl--when-inner-text-match
-         'a (concat "\\(?1:" re-entity-id "\\)")
-         `(("ID" . ,(match-string 1 s))))
+            'a (concat "\\(?1:" re-entity-id "\\)")
+          `(("ID" . ,(match-string 1 s))))
         (ndlj-openurl--when-text-match " )")
         (cdr result)))
      ;; Topic Term without ID
@@ -235,46 +183,48 @@ The bib item URL should have a path '/books/<id>'."
            (result '(nil)) (node-index 0))
        (and
         (ndlj-openurl--when-inner-text-match
-         'a (concat "\\(?1:" re-topic-name "\\)")
-         (let ((topic-name (match-string 1 s)))
-           (append `(("件名" . ,topic-name)))))
+            'a (concat "\\(?1:" re-topic-name "\\)")
+          (let ((topic-name (match-string 1 s)))
+            (append `(("件名" . ,topic-name)))))
         (cdr result))))))
 
-(defun ndlj-openurl--process-creator-indices (node)
+(defun ndlj-openurl--extract-creator-indices (node)
   "Process NODE ('dd') as creator indices alist."
   (mapcar (lambda (span)
-            (ndlj-openurl--process-index span))
+            (ndlj-openurl--extract-index span))
           (dom-by-tag node 'span)))
 
-(defun ndlj-openurl--process-topic-term-indices (node)
+(defun ndlj-openurl--extract-topic-term-indices (node)
   "Process NODE ('dd') as topic term indices alist."
   (mapcar (lambda (span)
-            (ndlj-openurl--process-index span))
+            (ndlj-openurl--extract-index span))
           (dom-by-tag node 'span)))
 
-(defun ndlj-openurl--process-publication-date (node)
+(defun ndlj-openurl--extract-publication-date (node)
   "Process NODE ('dd') as publication date."
   (let ((pattern "\\([0-9]+\\)\\(\\.\\([0-9]+\\)\\)?\\(\\.\\([0-9]+\\)\\)?")
         (s (dom-inner-text (dom-by-tag node 'span))))
     (if (string-match pattern s)
-        (let ((year (match-string 1 s))
-              (month (match-string 3 s))
-              (day (match-string 5 s)))
-          (list (when year (string-to-number year))
-                (when month (string-to-number month))
-                (when day (string-to-number day))))
+        (make-decoded-time :year (when-let* ((year (match-string 1 s)))
+                                   (string-to-number year))
+                           :month (when-let* ((month (match-string 3 s)))
+                                    (string-to-number month))
+                           :day (when-let* ((day (match-string 5 s)))
+                                  (string-to-number day)))
+      (ndlj-message "Unparsable date: '%s'" s)
       s)))
 
-(defun ndlj-openurl--process-publication-year (node)
+(defun ndlj-openurl--extract-publication-year (node)
   "Process NODE ('dd') as publication year."
   (let ((pattern "\\([0-9]+\\)")
         (s (dom-inner-text (dom-by-tag node 'span))))
     (if (string-match pattern s)
-        (let ((year (match-string 1 s)))
-          (string-to-number year))
+        (make-decoded-time :year (when-let* ((year (match-string 1 s)))
+                                   (string-to-number year)))
+      (ndlj-message "Unparsable date: '%s'" s)
       s)))
 
-(defun ndlj-openurl--process-publisher (node)
+(defun ndlj-openurl--extract-publisher (node)
   "Process NODE ('dd') as publisher info alist."
   (let ((pattern "^\\(\\([^ :]+\\) *: *\\)?\\([^ (]+\\)\\( *(\\([^)]+\\))\\)?"))
     (mapcar
@@ -289,7 +239,7 @@ The bib item URL should have a path '/books/<id>'."
                      (when role `(("その他" . ,role))))))))
      (dom-by-tag node 'span))))
 
-(defun ndlj-openurl--process-quantity (node)
+(defun ndlj-openurl--extract-quantity (node)
   "Process NODE ('dd') as quantity."
   (let ((pattern "^\\([0-9]+\\) *\\(.+\\)?$")
         (s (dom-inner-text (dom-by-tag node 'span))))
@@ -300,12 +250,130 @@ The bib item URL should have a path '/books/<id>'."
             ("単位" . ,unit)))
       s)))
 
-(defun ndlj-openurl--process-ndl-bib-id (node)
+(defun ndlj-openurl--extract-ndl-bib-id (node)
   "Process NODE ('dd') as quantity."
   (append (when-let* ((span (dom-by-tag node 'span)))
             `(("NDLBibID" . ,(dom-inner-text span))))
           (when-let* ((a (dom-by-tag node 'a)))
             `(("URL" . ,(dom-inner-text a))))))
+
+(defun ndlj-openurl-book-creators (rec)
+  "Render CREATORS and SERIES-CREATORS as :creators.
+When given, CREATOR-INDICES holds creator index (著者標目) entries."
+  (let ((creators (map-elt rec "著者・編者"))
+        (series-creators (mapcar
+                          (lambda (it) (cons '(series .  t) it))
+                          (map-elt rec "シリーズ著者・編者")))
+        (creator-entities (mapcar
+                           (lambda (it)
+                             (let ((key (concat (map-elt it 'surname)
+                                                (map-elt it 'given-name))))
+                               `(,key . ,it)))
+                           (map-elt rec "著者標目"))))
+    (mapcar (lambda (creator)
+              (append
+               `((role . ,(let ((role (map-elt creator 'role)))
+                            (if (map-elt creator 'series)
+                                (concat "シリーズ" role)
+                              role))))
+               (if-let* ((fullname (map-elt creator 'fullname)))
+                   (if-let* ((ce (map-elt creator-entities fullname)))
+                       `((surname . ,(map-elt ce 'surname))
+                         (given-name . ,(map-elt ce 'given-name)))
+                     `((fullname . ,fullname)))
+                 `((surname . ,(map-elt creator 'surname))
+                   (given-name . ,(map-elt creator 'given-name))))))
+            (append creators series-creators))))
+
+(defun ndlj-openurl-book-date (rec)
+  "Render date from REC."
+  (let ((date (map-elt rec "出版年月日等")))
+    (if (stringp date)
+        date
+      (format-time-string
+       (cond ((and (decoded-time-year date)
+                   (decoded-time-month date)
+                   (decoded-time-day date))
+              "%Y-%m-%d")
+             ((and (decoded-time-year date)
+                   (decoded-time-month date))
+              "%Y-%m")
+             ((decoded-time-year date)
+              "%Y")
+             (t "%Y-%m-%d"))
+       (encode-time (decoded-time-set-defaults date))))))
+
+(defun ndlj-openurl-bib-item-get (search-result-item)
+  "Get an item as alist from SEARCH-RESULT-ITEM."
+  (let* ((item-url (map-elt search-result-item 'item-url))
+         (rec (with-ndlj-url-retrieve-html item-url
+                (mapcar
+                 (lambda (node)
+                   (when-let*
+                       ((field (dom-inner-text (dom-by-tag node 'dt)))
+                        (value (if-let* ((exf (map-elt ndlj-openurl--field-extractors field)))
+                                   (funcall exf (car (dom-by-tag node 'dd)))
+                                 (dom-inner-text (dom-by-tag node 'dd)))))
+                     `(,field . ,value)))
+                 (dom-by-class (dom-by-class dom "pages-books-section-bib-list")
+                               "pages-books-ndls-section-bib-list-item")))))
+    (append
+     `((ndl:url . ,item-url)
+       (material-type . ,(map-elt rec "資料種別")))
+     (let* ((title (map-elt rec "タイトル"))
+            (short-title (and (string-match "\\( *[:：]+ *\\)" title)
+                              (ndlj-string-normalize-ja
+                               (substring title 0 (match-beginning 1)))))
+            (series-title (when-let* ((s (map-elt rec "シリーズタイトル")))
+                            (ndlj-string-normalize-ja s)))
+            (title (ndlj-string-normalize-ja (string-replace ":" " " title))))
+       (append (when title `((title . ,title)))
+               (when (< (length short-title) (length title))
+                 `((short-title . ,short-title)))))
+     (when-let* ((volume (map-elt rec "巻次・部編番号")))
+       `((volume . ,volume)))
+     `((creators . ,(ndlj-openurl-book-creators rec)))
+     (when-let* ((s (map-elt rec "シリーズタイトル")))
+       (let* ((parts (when (string-match "[ \t]*[;][ \t]*" s)
+                       (cons (substring s 0 (match-beginning 0))
+                             (substring s (match-end 0)))))
+              (series (or (car parts) s))
+              (series-number (cdr parts)))
+         (append (when series `((series . ,series)))
+                 (when series-number `((series-number . ,series-number))))))
+     `((edition . ,(map-elt rec "版")))
+     (let* ((item (seq-find (lambda (it)
+                              (let ((etc (map-elt it "その他")))
+                                (or (null etc) (string= etc "出版"))))
+                            (map-elt rec "出版事項")))
+            (publisher (map-elt item "出版社"))
+            (place (map-elt item "所在地")))
+       (append (when publisher `((publisher . ,publisher)))
+               (when place `((place . ,place)))))
+     `((date . ,(ndlj-openurl-book-date rec))
+       (num-pages . ,(let ((it (map-elt rec "数量")))
+                       (if (string= (map-elt it "単位") "p")
+                           (map-elt it "数量"))))
+       (isbn . ,(map-elt rec "ISBN"))
+       (language . ,(map-elt rec "本文の言語コード"))
+       (call-number . ,(map-elt rec "請求記号"))
+       (extra . (("NDLBibID" . ,(map-elt (map-elt rec "書誌ID（NDLBibID）") "NDLBibID"))))
+       (tags . ,(append
+                 (mapcar
+                  (lambda (s)
+                    (when (string-match "\\`.*: *\\(?1:.+\\)\\'" s)
+                      (string-split (match-string 1 s) "\\([．]\\|--\\)" t "\\s-+")))
+                  (append (when (map-elt rec "NDC9版") `(,(map-elt rec "NDC9版")))
+                          (when (map-elt rec "NDC10版") `(,(map-elt rec "NDC10版")))))
+                 (mapcar
+                  (lambda (it)
+                    (cond ((map-elt it "氏名")
+                           (map-elt it "氏名"))
+                          ((and (map-elt it "氏") (map-elt it "名"))
+                           (concat (map-elt it "氏") " " (map-elt it "名")))
+                          (t
+                           (string-split (map-elt it "件名") "--" 'omit-empty "\\s-+"))))
+                  (map-elt rec "件名標目"))))))))
 
 ;;; Search Query
 
@@ -324,75 +392,57 @@ The bib item URL should have a path '/books/<id>'."
               (lambda (node)
                 (when node
                   (dom-inner-text node)))))
-    (let* ((url-request-method "GET")
-           (url-request-data nil)
-           (url-request-extra-headers nil)
-           (url-automatic-caching t)
-           ;; TODO: Use `url-retrieve' for asynchronous callbacks:
-           (response-buffer (url-retrieve-synchronously url)))
-      (unless response-buffer
-        (error "Response not received from %s" url))
-      (with-current-buffer response-buffer
-        (set-buffer-multibyte t)
-        (decode-coding-region (point-min) (point-max) 'utf-8)
-        (goto-char (point-min))
-        (search-forward "\n\n" nil t)
-        (let ((dom (libxml-parse-html-region (point) (point-max))))
+    (let ((url-request-method "GET")
+          (url-request-data nil)
+          (url-request-extra-headers nil))
+      (with-ndlj-url-retrieve-html url
+        (let ((resolved-url (url-recreate-url url-http-target-url))
+              (hostname (url-host url-http-target-url)))
           (cons
-           (dom-attr (car (dom-by-id dom (cname "layouts-global-skip-link")))
-                     'href)
+           resolved-url
            (mapcar
             (lambda (node)
-              (let ((item-types
-                     (mapconcat
-                      (lambda (span)
-                        (let ((s (dom-inner-text span)))
-                          (map-elt ndlj-item-types-abbrev s s)))
-                      (dom-by-class node "search-result-item-type-tag")
-                      " "))
-                    (item-material-types
-                     (mapconcat
-                      (lambda (span)
-                        (let ((s (dom-inner-text span)))
-                          (map-elt ndlj-item-material-types-abbrev s s)))
-                      (dom-by-class node "search-result-item-material-type-tag")
-                      "/"))
-                    (meta (car (by-class node "search-result-item-meta"))))
-                (list
-                 (cons 'title
-                       (inner-text (car (by-class node "search-result-item-heading"))))
-                 (cons 'categories (concat item-types))
-                 (cons 'material-types item-material-types)
-                 (cons 'url
-                       (dom-attr
-                        (car (dom-by-tag
-                              (car (by-class node "base-heading"))
-                              'a))
-                        'href))
-                 (cons 'author
-                       (inner-text (car (by-class meta "author"))))
-                 (cons 'publisher
-                       (inner-text (car (by-class meta "publisher"))))
-                 (cons 'publish-date
-                       (inner-text (car (by-class meta "publish-date"))))
-                 (cons 'book
-                       (inner-text (car (by-class meta "book"))))
-                 (cons 'book-publish-date
-                       (inner-text (car (by-class meta "book-publish-date"))))
-                 (cons 'page
-                       (inner-text (car (by-class meta "page"))))
-                 (cons 'highlight
-                       (mapconcat (lambda (ul)
-                                    (inner-text ul))
-                                  (by-class node "search-result-item-highlight")
-                                  "\n"))
-                 ;; TODO(2026-07-19): These nodes are filled dynamically
-                 ;; via JS and not available; consider a headless
-                 ;; browser like puppeteer or playwright to support this:
-                 ;; (cons 'children
-                 ;;       (inner-text
-                 ;;        (car (by-class meta "search-result-item-children"))))
-                 )))
+              (let* ((item-types
+                      (mapconcat
+                       (lambda (span)
+                         (let ((s (dom-inner-text span)))
+                           (map-elt ndlj-item-types-abbrev s s)))
+                       (dom-by-class node "search-result-item-type-tag")
+                       " "))
+                     (item-material-types
+                      (mapconcat
+                       (lambda (span)
+                         (let ((s (dom-inner-text span)))
+                           (map-elt ndlj-item-material-types-abbrev s s)))
+                       (dom-by-class node "search-result-item-material-type-tag")
+                       "/"))
+                     (meta (car (by-class node "search-result-item-meta")))
+
+                     (base-heading-a (dom-by-tag (by-class node "base-heading") 'a))
+                     (item-url-path (dom-attr base-heading-a 'href))
+                     (repo-item-id (dom-attr base-heading-a 'id)))
+                `((material-types . ,item-material-types)
+                  (item-url . ,(ndlj-url-unparse :netloc hostname :path item-url-path))
+                  (repo-item-id . ,repo-item-id)
+                  (title . ,(inner-text (car (by-class node "search-result-item-heading"))))
+                  (categories . ,(concat item-types))
+                  (author . ,(inner-text (car (by-class meta "author"))))
+                  (publisher . ,(inner-text (car (by-class meta "publisher"))))
+                  (publish-date . ,(inner-text (car (by-class meta "publish-date"))))
+                  (book . ,(inner-text (car (by-class meta "book"))))
+                  (book-publish-date . ,(inner-text (car (by-class meta "book-publish-date"))))
+                  (page . ,(inner-text (car (by-class meta "page"))))
+                  (highlight . ,(mapconcat (lambda (ul)
+                                             (inner-text ul))
+                                           (by-class node "search-result-item-highlight")
+                                           "\n"))
+                  ;; TODO(2026-07-19): These nodes are filled dynamically
+                  ;; via JS and not available; consider a headless
+                  ;; browser like puppeteer or playwright to support this:
+                  ;; (cons 'children
+                  ;;       (inner-text
+                  ;;        (car (by-class meta "search-result-item-children"))))
+                  )))
             (by-class (car (by-class dom "search-result-body"))
                       "search-result-item"))))))))
 
@@ -408,50 +458,38 @@ DPID maps to the query parameter 'ndl_dpid'."
            ;; ndl_dpid can be repeated; it interprets space-delimited
            ;; values, like other multi-word fields.
            (when dpid
-             (list (cons 'ndl_dpid
-                         (list (or (and (listp dpid) (string-join dpid " "))
-                                   dpid)))))
-           (when any (list (cons 'any (list any))))
-           (when title (list (cons 'btitle (list title))))
-           (when creator (list (cons 'au (list creator))))))
-         (url (ndlj-build-url
-               "https://ndlsearch.ndl.go.jp/api/openurl" nil query-params))
+             `((ndl_dpid . (,(or (and (listp dpid) (string-join dpid " "))
+                                 dpid)))))
+           (when any `((any . (,any))))
+           (when title `((btitle . (,title))))
+           (when creator `((au . (,creator))))))
+         (url (ndlj-url-unparse :netloc ndlj-openurl-hostname
+                                :path ndlj-openurl-api-path
+                                :params query-params))
          all-items)
     (while
-        (pcase-let* ((`(,resolved-url . ,items) (ndlj-openurl--extract-search-items url))
-                     (parts (split-string
-                             (url-filename
-                              (url-generic-parse-url resolved-url))
-                             "\\?"))
-                     (url-path (nth 0 parts))
-                     (raw-query (nth 1 parts))
-                     (query-params (when raw-query
-                                     (url-parse-query-string raw-query))))
-          (ndlj-message "Extracted %d item(s) from '%s'" (length items) resolved-url)
-          (redisplay)
+        (pcase-let*
+            ((`(,resolved-url . ,items) (ndlj-openurl--extract-search-items url))
+             (url-st (ndlj-url-parse resolved-url))
+             (query-params (ndlj-url-params url-st)))
+          (ndlj-message "Found %d item(s) at '%s'" (length items) resolved-url)
           (when items
             (setq all-items (append all-items items))
             (unless (<= ndlj-openurl-max-items (length all-items))
-              ;; Paginate
-              (let* ((from (string-to-number
-                            (car (map-elt query-params "from" (list "0")))))
-                     (size (string-to-number
-                            (car (map-elt query-params "size" (list "20"))))))
-                (setf (map-elt query-params "from")
-                      (list (number-to-string (+ from size))))
-                (setf (map-elt query-params "size")
-                      (list "100")))
-
-              (setq url (url-recreate-url
-                         (url-parse-make-urlobj
-                          "https" nil nil "ndlsearch.ndl.go.jp" nil
-                          (concat url-path
-                                  "?" (url-build-query-string query-params))
-                          nil nil t)))
+              ;; Need another query to paginate
+              (let ((from (or (when-let* ((from (map-elt query-params "from")))
+                                (string-to-number (car from)))
+                              0))
+                    (size (or (when-let* ((size (map-elt query-params "size")))
+                                (string-to-number (car size)))
+                              (length items))))
+                (setf (map-elt query-params "from") `(,(number-to-string (+ from size)))
+                      (map-elt query-params "size") '("100")))
+              (setf (ndlj-url-params url-st) query-params)
+              (setq url (ndlj-url-unparse :url url-st))
 
               ;; Be nice to the API server.
-              (apply #'ndlj-sleep
-                     (if (listp ndlj-openurl-sleep) ndlj-openurl-sleep (list ndlj-openurl-sleep)))
+              (apply #'ndlj-sleep (if (listp ndlj-openurl-sleep) ndlj-openurl-sleep `(,ndlj-openurl-sleep)))
               t))))
     (take ndlj-openurl-max-items all-items)))
 

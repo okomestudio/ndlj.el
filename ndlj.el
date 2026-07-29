@@ -35,16 +35,7 @@
 
 (require 'compat)
 
-;; (require 'cl-lib)
-;; (require 'dom)
 (require 'map)
-;; (require 'seq)
-;; (require 'url-expand)
-(require 'url-parse)
-;; (require 'url-util)
-;; (require 'xml)
-
-;; (require 's)
 
 (eval-when-compile
   (require 'consult nil t))
@@ -113,8 +104,13 @@
   '("zassaku" "iss-ndl-opac")
   "All available data providers.")
 
-(defconst ndlj--regexp-roles
-  (regexp-opt '("著" "編" "訳" "監修" "漫画")))
+(defvar ndlj-search-query-function
+  #'ndlj-openurl-search-query)
+
+(defvar ndlj-item-getter
+  #'ndlj-openurl-bib-item-get)
+
+;;; Completion Interface
 
 (defun ndlj--create-completion (item-alist)
   "Create a completion string, along with prefix and suffix, from ITEM-ALIST."
@@ -129,7 +125,7 @@
                    (list (propertize " " 'display `(space :align-to ,col))
                          text))))))
     (let-alist item-alist
-      (let* ((width (frame-width)) ; used to be `window-body-width' of `minibuffer-window'
+      (let* ((width (frame-width)) ; it was `window-body-width' of `minibuffer-window'
              (prefix
               (concat (s-align (or .categories "") 9 'right)))
              (completion
@@ -144,7 +140,7 @@
                                (round (* width 0.80)))))
              (suffix
               (concat (s-align (or .material-types "") width 'right))))
-        (list completion prefix suffix)))))
+        `(,completion ,prefix ,suffix)))))
 
 (defun ndlj--completing-read (search-result-items)
   "Completing read SEARCH-RESULT-ITEMS."
@@ -162,18 +158,16 @@
        (completion-extra-properties
         '(:affixation-function
           (lambda (completions)
-            (mapcar
-             (lambda (cmpl)
-               (list cmpl
-                     (get-text-property 0 'completion-prefix cmpl)
-                     (get-text-property 0 'completion-suffix cmpl)))
-             completions))))
+            (mapcar (lambda (cmpl)
+                      (list cmpl
+                            (get-text-property 0 'completion-prefix cmpl)
+                            (get-text-property 0 'completion-suffix cmpl)))
+                    completions))))
        (chosen
-        (cond
-         ((featurep 'consult)
-          (ndlj--completing-read-consult candidates))
-         (t
-          (map-elt (completing-read "Filter: " candidates) candidates)))))
+        (cond ((featurep 'consult)
+               (ndlj--completing-read-consult candidates))
+              (t
+               (map-elt (completing-read "Filter: " candidates) candidates)))))
     (get-text-property 0 'item-data chosen)))
 
 (defun ndlj--completing-read-consult (candidates)
@@ -222,21 +216,18 @@
 (defun ndlj-query--command (&rest args)
   "Query interface for interactive command.
 ARGS are passed to a search query function."
-  (let ((dpid (if current-prefix-arg
-                  (completing-read-multiple
-                   "Choose data provider: " ndlj-data-providers
-                   nil t (string-join ndlj-dpid ","))
-                ndlj-dpid)))
-    (require 'ndlj-openurl)
+  (let ((dpid
+         (if current-prefix-arg
+             (completing-read-multiple "Choose data provider: "
+                                       ndlj-data-providers
+                                       nil t (string-join ndlj-dpid ","))
+           ndlj-dpid)))
     (when-let*
         ((search-result-item
           (ndlj--completing-read
-           (apply #'ndlj-openurl-search-query `(:dpid ,dpid ,@args))))
-         (entity-path (map-elt search-result-item 'url))
-         (url (url-recreate-url
-               (url-parse-make-urlobj "https" nil nil "ndlsearch.ndl.go.jp" nil
-                                      entity-path nil nil t))))
-      (ndlj-openurl-bib-item-get url))))
+           (apply ndlj-search-query-function
+                  `(:dpid ,dpid ,@args)))))
+      (funcall ndlj-item-getter search-result-item))))
 
 ;;;###autoload
 (defun ndlj-search-any (query)

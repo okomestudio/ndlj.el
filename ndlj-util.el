@@ -25,19 +25,49 @@
 
 (require 'compat)
 
+(require 'cl-lib)
+(require 'url)
 (require 'url-expand)
 (require 'url-util)
+(require 'xml)
 
-(defun ndlj-build-url (base-url path-segments query-alist)
-  "Construct a safe, fully-encoded URL.
-BASE-URL is the endpoint root (e.g., https://example.com/api/).
-PATH-SEGMENTS is a list of unencoded string directories or endpoints.
-QUERY-ALIST is an association list of keys and values for parameters."
-  (let* ((clean-path (mapconcat #'url-hexify-string path-segments "/"))
-         (full-url (url-expand-file-name clean-path base-url)))
-    (if query-alist
-        (concat full-url "?" (url-build-query-string query-alist))
-      full-url)))
+;;; HTTP
+
+(defmacro with-ndlj-url-retrieve (url &rest body)
+  "Retrieve URL into a buffer and run BODY in it."
+  (declare (indent 1))
+  `(let ((url-automatic-caching t)
+         ;; TODO: Use `url-retrieve' for asynchronous callbacks:
+         (buf (url-retrieve-synchronously ,url)))
+     (unless buf
+       (error "Response not received from %s" url))
+     (when buf
+       (prog1
+           (with-current-buffer buf
+             (set-buffer-multibyte t)
+             (decode-coding-region (point-min) (point-max) 'utf-8)
+             (progn ,@body))
+         (kill-buffer buf)))))
+
+(defmacro with-ndlj-url-retrieve-html (url &rest body)
+  "Retrieve an HTML content from URL into a buffer and run BODY in it.
+Within BODY, the variable `dom' is available for processing."
+  (declare (indent 1))
+  `(with-ndlj-url-retrieve ,url
+     (goto-char (point-min))
+     (re-search-forward "\r?\n\r?\n" nil t)
+     (let ((dom (libxml-parse-html-region (point) (point-max))))
+       ,@body)))
+
+(defmacro with-ndlj-url-retrieve-xml (url &rest body)
+  "Retrieve an XML content from URL into a buffer and run BODY in it.
+Within BODY, the variable `dom' is available for processing."
+  (declare (indent 1))
+  `(with-ndlj-url-retrieve ,url
+     (goto-char (point-min))
+     (re-search-forward "\r?\n\r?\n" nil t)
+     (let ((dom (xml-parse-region (point) (point-max) nil nil nil)))
+       ,@body)))
 
 (defun ndlj-sleep (seconds &optional jitter)
   "Sleep for SECONDS plus a JITTER.
@@ -46,6 +76,83 @@ betwee 0 and JITTER."
   (sleep-for (+ seconds (if jitter
                             (/ (random (round (* jitter 1000.0))) 1000.0)
                           0))))
+
+;;; URL
+
+(cl-defstruct (ndlj-url (:include url))
+  path params)
+
+(cl-defun ndlj-url-parse (url)
+  "Parse URL into a `ndlj-url' struct."
+  (let ((url (url-generic-parse-url url)))
+    (make-ndlj-url :type (url-type url)
+                   :user (url-user url)
+                   :password (url-password url)
+                   :host (url-host url)
+                   :portspec (url-portspec url)
+                   :filename (url-filename url)
+                   :target (url-target url)
+                   :fullness (url-fullness url)
+                   :path (car (url-path-and-query url))
+                   :params (when (cdr (url-path-and-query url))
+                             (url-parse-query-string
+                              (cdr (url-path-and-query url)))))))
+
+(cl-defun ndlj-url-unparse ( &key
+                             url
+                             scheme
+                             netloc
+                             path
+                             params
+                             query    ; unimplemented (see RFC 2396)
+                             fragment
+                             username
+                             password
+                             hostname
+                             port )
+  "Construct a safe, fully-encoded URL."
+  (let ((path (or (and url (ndlj-url-path url))
+                  (and path (mapconcat #'url-hexify-string
+                                       (string-split path "/")
+                                       "/"))))
+        (params (or (and url (ndlj-url-params url))
+                    params)))
+    (when netloc
+      (when (string-match
+             "\\`\\(\\(?2:[^:]+\\)\\(\\:\\(?4:[^@]+\\)\\)@\\)?\\(?5:[^:]+\\)\\(\\:\\(?7:.+\\)\\)?\\'"
+             netloc)
+        (setq username (match-string 2 netloc)
+              password (match-string 4 netloc)
+              hostname (match-string 5 netloc)
+              port (match-string 7 netloc))))
+    (url-recreate-url
+     (url-parse-make-urlobj
+      (or (and url (url-type url)) scheme "https")
+      (or (and url (url-user url)) username)
+      (or (and url (url-password url)) password)
+      (or (and url (url-host url)) hostname)
+      (or (and url (url-portspec url)) port)
+      (if params (concat path "?" (url-build-query-string params)) path)
+      (or (and url (url-target url)) fragment)
+      nil t))))
+
+;;; String Operations
+
+(defun ndlj-string-normalize-ja (str)
+  "Normalize STR with standard Japanese characters (typically zenkaku)."
+  (pcase-dolist (`(,from . ,to) '(("　" . " ")
+                                  ("!" . "！")
+                                  ("?" . "？")
+                                  ("(" . "（")
+                                  (")" . "）")
+                                  ("\\[" . "［")
+                                  ("\\]" . "］")
+                                  (":" . "：")
+                                  (" +" . " ")))
+    (setq str (replace-regexp-in-string from to str)))
+  str)
+
+;;; System
 
 (defun ndlj-message (s &rest args)
   "Display S via `message'.
