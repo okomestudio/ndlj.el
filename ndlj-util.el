@@ -26,6 +26,7 @@
 (require 'compat)
 
 (require 'cl-lib)
+(require 'dom)
 (require 'url)
 (require 'url-expand)
 (require 'url-util)
@@ -104,8 +105,6 @@ Within BODY, the variable `dom' is available for processing."
      (goto-char (point-min))
      (re-search-forward "\r?\n\r?\n" nil t)
      (let ((dom (libxml-parse-html-region (point) (point-max))))
-       (when ndlj-debug
-         (pp dom))
        ,@body)))
 
 (defmacro with-ndlj-url-retrieve-xml (url &rest body)
@@ -116,8 +115,6 @@ Within BODY, the variable `dom' is available for processing."
      (goto-char (point-min))
      (re-search-forward "\r?\n\r?\n" nil t)
      (let ((dom (xml-parse-region (point) (point-max) nil nil nil)))
-       (when ndlj-debug
-         (pp dom))
        ,@body)))
 
 (defun ndlj-sleep (seconds &optional jitter)
@@ -187,6 +184,42 @@ betwee 0 and JITTER."
       (or (and url (url-target url)) fragment)
       nil t))))
 
+;;; DOM
+
+(cl-defun ndlj-dom-by-path
+    (dom tags &key (fun #'dom-inner-text) (reducer #'car))
+  "Extract nested nodes from DOM matching a sequence of TAGS.
+FUN is applied to each node found. REDUCER is applied to the list of
+nodes found."
+  (let ((results
+         (seq-reduce (lambda (nodes tag)
+                       (mapcan (lambda (node) (dom-by-tag node tag))
+                               nodes))
+                     (if (listp tags) tags (list tags))
+                     (list dom))))
+    (setq results (if fun (mapcar fun results) results))
+    (if reducer (funcall reducer results) results)))
+
+(cl-defun ndlj-dom-by-path-attr (dom tags attribute &key (reducer #'car))
+  "Get ATTRIBUTE values of nodes from DOM matching a TAGS sequence.
+REDUCER is applied to the list of nodes found."
+  (let ((results (mapcar (lambda (it) (dom-attr it attribute))
+                         (ndlj-dom-by-path dom tags :fun nil :reducer nil))))
+    (if reducer (funcall reducer results) results)))
+
+(cl-defun ndlj-dom-by-tag-by-attr
+    (dom tag attribute value &key (fun #'dom-inner-text) (reducer #'car))
+  "Extract DOM nodes by TAG with ATTRIBUTE matching VALUE.
+FUN is applied to each node found. REDUCER is applied to the list of
+nodes found."
+  (let ((results (seq-keep (lambda (node)
+                             (when-let* ((s (or (dom-attr node attribute) ""))
+                                         (_ (string-match value s)))
+                               node))
+                           (dom-by-tag dom tag))))
+    (setq results (if fun (mapcar fun results) results))
+    (if reducer (funcall reducer results) results)))
+
 ;;; String Operations
 
 (defun ndlj-string-normalize-ja (str)
@@ -209,6 +242,10 @@ betwee 0 and JITTER."
   "Display S via `message'.
 ARGS are data used if S is format string."
   (apply #'message `(,(concat "[ndlj] " s) ,@args)))
+
+(defmacro ndlj-debug-message (s &rest args)
+  "Evaluate `ndlj-message' with S and ARGS when `ndlj-debug' is non-nil."
+  `(when ndlj-debug ,(apply #'ndlj-message `(,s ,@args))))
 
 (defun ndlj-warn (s &rest args)
   "Display S via `warning'.

@@ -114,6 +114,11 @@
          (when yod
            `((yod . ,(if yod-epoch (concat yod " " yod-epoch) yod))))))))
 
+(defun ndlj-api-tags-from-topic (str)
+  "Parse tags from topic STR."
+  (ndlj-debug-message "api-tags-from-topic: '%s'" str)
+  (string-split str "\\( *-- *\\| *(\\|) *\\)" 'omit-empty "\\s-+"))
+
 (defun ndlj-api-book-titles (title &optional series-title)
   "Parse TITLE and optionally SERIES-TITLE to get title and short title."
   (let* ((short-title (and (string-match "\\( *[:：]+ *\\)" title)

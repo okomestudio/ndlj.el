@@ -25,6 +25,7 @@
 
 (require 'compat)
 
+(require 'seq)
 (require 'xml)
 
 (require 'ndlj-api)
@@ -40,98 +41,81 @@ REPO-ITEM-ID is of form `R<number>-I<number>'."
                                 (metadataPrefix . ("dcndl_v3"))
                                 (identifier . (,identifier))))))
 
-(defun ndlj-oaipmh-dom-by-tag-attr (dom tag attribute value)
-  "Get DOM nodes by TAG matching ATTRIBUTE VALUE."
-  (seq-keep (lambda (node)
-              (when-let* ((s (dom-attr node attribute)))
-                (when (string-match value s)
-                  node)))
-            (dom-by-tag dom tag)))
-
 (defun ndlj-oaipmh-book-extra (dom)
   (append
    (when-let* ((resource "\\`http://id.ndl.go.jp/class/ndc10/\\(.*\\)")
-               (n (ndlj-oaipmh-dom-by-tag-attr dom 'dcterms:subject 'rdf:resource resource))
+               (n (ndlj-dom-by-tag-by-attr dom 'dcterms:subject 'rdf:resource resource))
                (s (dom-attr n 'rdf:resource))
                (_ (string-match resource s)))
      `(("NDLC10" . ,(match-string 1 s))))
    (when-let* ((resource "http://ndl.go.jp/dcndl/terms/NDLBibID")
-               (n (ndlj-oaipmh-dom-by-tag-attr dom 'dcterms:identifier 'rdf:datatype resource)))
+               (n (ndlj-dom-by-tag-by-attr dom 'dcterms:identifier 'rdf:datatype resource)))
      `(("NDLBibID" . ,(dom-inner-text n))))))
 
 ;;;###autoload
 (defun ndlj-oaipmh-bib-item-get (search-result-item)
   "Get an item as alist from SEARCH-RESULT-ITEM."
   (let* ((item-url (map-elt search-result-item 'item-url))
-         (repo-item-id (map-elt search-result-item 'repo-item-id))
-         (repo-item-url (ndlj-oaipmh-url-get-record repo-item-id))
-         (results
-          (ndlj-url-retrieve-gather
-           `((,repo-item-url . ndlj-url-retrieve-as-xml)
-             (,item-url . (lambda (start end)
-                            (let ((dom (ndlj-url-retrieve-as-html start end)))
-                              (require 'ndlj-openurl nil t)
-                              (let ((rec (ndlj-openurl-extract-fields dom)))
-                                `( :extra ,(ndlj-openurl-book-extra rec)
-                                   :tags ,(ndlj-openurl-book-tags rec) ))))))))
+         (repo-item-url (ndlj-oaipmh-url-get-record
+                         (map-elt search-result-item 'repo-item-id)))
+         (results (ndlj-url-retrieve-gather
+                   `((,repo-item-url . ndlj-url-retrieve-as-xml)
+                     (,item-url
+                      . (lambda (start end)
+                          (require 'ndlj-openurl nil t)
+                          (let* ((dom (ndlj-url-retrieve-as-html start end))
+                                 (rec (ndlj-openurl-extract-fields dom)))
+                            `( :extra ,(ndlj-openurl-book-extra rec)
+                               :tags ,(ndlj-openurl-book-tags rec) )))))))
          (rec (dom-by-tag (plist-get (nth 0 results) :value) 'record))
          (extra (plist-get (plist-get (nth 1 results) :value) :extra))
          (tags (plist-get (plist-get (nth 1 results) :value) :tags)))
-    (append
-     `((ndl:url . ,item-url)
-       (material-type . ,(dom-attr (dom-by-tag rec 'dcndl:materialType) 'rdfs:label)))
-     (let-alist (ndlj-api-book-titles
-                 (dom-inner-text (dom-by-tag (dom-by-tag rec 'dc:title) 'rdf:value)))
-       `((title . ,.title)
-         (short-title . ,.short-title)))
-     `((volume . ,(dom-inner-text (dom-by-tag (dom-by-tag rec 'dcndl:volume) 'rdf:value))))
-     (let ((creators
-            (apply #'append
-                   (seq-keep #'ndlj-api-parse-creator
-                             (mapcar #'dom-inner-text
-                                     (dom-by-tag rec 'dc:creator)))))
-           (series-creators
-            (seq-keep (lambda (em)
-                        (when em
-                          (cons '(series . t) em)))
-                      (apply #'append
-                             (mapcar #'ndlj-api-parse-creator
-                                     (mapcar #'dom-inner-text
-                                             (dom-by-tag rec 'dcndl:seriesCreator))))))
-           (creator-entities
-            (seq-keep #'ndlj-api-parse-entity-person-name
-                      (mapcar #'dom-inner-text
-                              (mapcar (lambda (it)
-                                        (dom-by-tag it 'foaf:name))
-                                      (dom-by-tag rec 'dcterms:creator))))))
-       `((creators . ,(ndlj-api-book-creators
-                       :creators creators
-                       :series-creators series-creators
-                       :creator-entities creator-entities))))
-     (let-alist (ndlj-api-book-series
-                 (dom-inner-text (dom-by-tag (dom-by-tag rec 'dcndl:seriesTitle) 'rdf:value)))
-       (append (when .series `((series . ,.series)))
-               (when .series-number `((series-number . ,.series-number)))))
-     `((edition . ,(dom-inner-text (dom-by-tag rec 'dcndl:edition))))
-     (let* ((node (dom-by-tag rec 'dcterms:publisher))
-            (publisher (dom-inner-text (dom-by-tag node 'foaf:name)))
-            (place (dom-inner-text (dom-by-tag node 'dcndl:location))))
-       (append (when publisher `((publisher . ,publisher)))
-               (when place `((place . ,place)))))
-     `((date . ,(ndlj-api-date-from-str
-                 (dom-inner-text (dom-by-tag rec 'dcterms:date)))))
-     (when-let* ((s (dom-inner-text (dom-by-tag rec 'dcterms:extent)))
-                 (_ (string-match "\\([0-9]+\\)\\s-?p" s))
-                 (num-pages (match-string 1 s)))
-       `((num-pages . ,num-pages)))
-     `((isbn . ,(dom-inner-text
-                 (ndlj-oaipmh-dom-by-tag-attr
-                  rec 'dcterms:identifier 'rdf:datatype
-                  "\\`http://ndl.go.jp/dcndl/terms/ISBN\\'")))
-       (language . ,(dom-inner-text (dom-by-tag rec 'dcterms:language)))
-       (call-number . ,(dom-inner-text (dom-by-tag rec 'dcndl:callNumber)))
-       (extra . ,(or extra (ndlj-oaipmh-book-extra rec)))
-       (tags . ,tags)))))
+    (seq-filter
+     #'cdr
+     (append
+      `((ndl:url . ,item-url)
+        (material-type . ,(ndlj-dom-by-path-attr rec 'dcndl:materialType 'rdfs:label)))
+      (let-alist (ndlj-api-book-titles (ndlj-dom-by-path rec '(dc:title rdf:value)))
+        `((title . ,.title)
+          (short-title . ,.short-title)))
+      `((volume . ,(ndlj-dom-by-path rec '(dcndl:volume rdf:value))))
+      (let ((creators
+             (mapcan #'ndlj-api-parse-creator
+                     (ndlj-dom-by-path rec 'dc:creator :reducer nil)))
+            (series-creators
+             (mapcan (lambda (it)
+                       (mapcar (lambda (em) (cons '(series . t) em))
+                               (ndlj-api-parse-creator it)))
+                     (ndlj-dom-by-path rec 'dcndl:seriesCreator :reducer nil)))
+            (creator-entities
+             (mapcar #'ndlj-api-parse-entity-person-name
+                     (ndlj-dom-by-path rec '(dcterms:creator foaf:name) :reducer nil))))
+        `((creators . ,(ndlj-api-book-creators :creators creators
+                                               :series-creators series-creators
+                                               :creator-entities creator-entities))))
+      (let-alist (ndlj-api-book-series
+                  (ndlj-dom-by-path rec '(dcndl:seriesTitle rdf:value)))
+        (append (when .series `((series . ,.series)))
+                (when .series-number `((series-number . ,.series-number)))))
+      `((edition . ,(ndlj-dom-by-path rec 'dcndl:edition))
+        (publisher . ,(ndlj-dom-by-path rec '(dcterms:publisher foaf:name)))
+        (place . ,(ndlj-dom-by-path rec '(dcterms:publisher dcndl:location)))
+        (date . ,(ndlj-api-date-from-str (ndlj-dom-by-path rec 'dcterms:date))))
+      (when-let* ((s (ndlj-dom-by-path rec 'dcterms:extent))
+                  (_ (string-match "\\([0-9]+\\)\\s-?p" s))
+                  (num-pages (match-string 1 s)))
+        `((num-pages . ,num-pages)))
+      `((isbn . ,(ndlj-dom-by-tag-by-attr rec 'dcterms:identifier 'rdf:datatype
+                                          "\\`http://ndl.go.jp/dcndl/terms/ISBN\\'"))
+        (language . ,(ndlj-dom-by-path rec 'dcterms:language))
+        (call-number . ,(ndlj-dom-by-path rec 'dcndl:callNumber))
+        (extra . ,(or extra (ndlj-oaipmh-book-extra rec)))
+        (tags
+         . ,(seq-uniq
+             (append tags
+                     (mapcan #'ndlj-api-tags-from-topic
+                             (ndlj-dom-by-path rec '(dcterms:subject rdf:value) :reducer nil)))))
+        )))))
 
 (provide 'ndlj-oaipmh)
 ;;; ndlj-oaipmh.el ends here

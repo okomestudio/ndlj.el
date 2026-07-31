@@ -98,17 +98,19 @@
   :type '(repeat (string :tag "Data provider"))
   :group 'ndlj)
 
-;;; Constants
-
-(defconst ndlj-data-providers
-  '("zassaku" "iss-ndl-opac")
-  "All available data providers.")
+;;; Variables
 
 (defvar ndlj-search-query-function
   #'ndlj-openurl-search-query)
 
 (defvar ndlj-item-getter
   #'ndlj-openurl-bib-item-get)
+
+;;; Constants
+
+(defconst ndlj-data-providers
+  '("zassaku" "iss-ndl-opac")
+  "All available data providers.")
 
 ;;; Completion Interface
 

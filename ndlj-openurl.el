@@ -161,7 +161,7 @@
         (ndlj-openurl--when-text-match " )")
         (cdr result)))
      ;; Topic Term
-     (let ((re-topic-name "[^ ]+")
+     (let ((re-topic-name ".+")
            (re-topic-yomi "\\(\\cK\\|[0-9a-zA-Z ]\\)+")
            (result '(nil)) (node-index 0))
        (and
@@ -302,7 +302,7 @@
               ((and (map-elt it "氏") (map-elt it "名"))
                (concat (map-elt it "氏") " " (map-elt it "名")))
               (t
-               (string-split (map-elt it "件名") " *-- *" 'omit-empty "\\s-+"))))
+               (ndlj-api-tags-from-topic (map-elt it "件名")))))
       (map-elt rec "件名標目"))))))
 
 ;;;###autoload
