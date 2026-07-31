@@ -108,6 +108,7 @@ REPO-ITEM-ID is of form `R<number>-I<number>'."
                  (dom-inner-text (dom-by-tag (dom-by-tag rec 'dc:title) 'rdf:value)))
        `((title . ,.title)
          (short-title . ,.short-title)))
+     `((volume . ,(dom-inner-text (dom-by-tag (dom-by-tag rec 'dcndl:volume) 'rdf:value))))
      `((creators . ,(ndlj-oaipmh-book-creators rec)))
      (let-alist (ndlj-api-book-series
                  (dom-inner-text (dom-by-tag (dom-by-tag rec 'dcndl:seriesTitle) 'rdf:value)))
