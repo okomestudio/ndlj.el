@@ -320,7 +320,7 @@ When given, CREATOR-INDICES holds creator index (著者標目) entries."
     (append
      (mapcar
       (lambda (str)
-        (cdr (string-split str "\\([.] \\|--\\)" t "\\s-+")))
+        (cdr (string-split str "\\([.]? \\|--\\)" t "\\s-+")))
       (append (when (map-elt rec "NDC9版") `(,(map-elt rec "NDC9版")))
               (when (map-elt rec "NDC10版") `(,(map-elt rec "NDC10版")))))
      (mapcar
@@ -330,7 +330,7 @@ When given, CREATOR-INDICES holds creator index (著者標目) entries."
               ((and (map-elt it "氏") (map-elt it "名"))
                (concat (map-elt it "氏") " " (map-elt it "名")))
               (t
-               (string-split (map-elt it "件名") "--" 'omit-empty "\\s-+"))))
+               (string-split (map-elt it "件名") " -- " 'omit-empty "\\s-+"))))
       (map-elt rec "件名標目"))))))
 
 ;;;###autoload
