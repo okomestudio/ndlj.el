@@ -90,6 +90,23 @@
       :tags nil
       :extra nil )))
 
+(defun ndlj-zotero-date-render (date)
+  "Render DATE for JSON."
+  (if (stringp date)
+      date
+    (format-time-string
+     (cond ((and (decoded-time-year date)
+                 (decoded-time-month date)
+                 (decoded-time-day date))
+            "%Y-%m-%d")
+           ((and (decoded-time-year date)
+                 (decoded-time-month date))
+            "%Y-%m")
+           ((decoded-time-year date)
+            "%Y")
+           (t "%Y-%m-%d"))
+     (encode-time (decoded-time-set-defaults date)))))
+
 (defun ndlj-zotero-item-book (rec)
   "Transform a record dom REC into a Zotero book item."
   (let ((item-type "book"))
@@ -120,7 +137,7 @@
         :edition ,(map-elt rec 'edition)
         :publisher ,(map-elt rec 'publisher)
         :place ,(map-elt rec 'place)
-        :date ,(map-elt rec 'date)
+        :date ,(ndlj-zotero-date-render (map-elt rec 'date))
         :numPages ,(map-elt rec 'num-pages)
         :isbn ,(map-elt rec 'isbn)
         :language ,(let ((lang (map-elt rec 'language)))

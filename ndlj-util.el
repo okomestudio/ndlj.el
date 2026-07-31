@@ -33,6 +33,51 @@
 
 ;;; HTTP
 
+(defun ndlj-url-retrieve-as-html (start end)
+  (libxml-parse-html-region start end))
+
+(defun ndlj-url-retrieve-as-xml (start end)
+  (xml-parse-region start end nil nil nil))
+
+(defun ndlj-url-retrieve-gather (urls &optional timeout)
+  "Fetch URLS concurrently and block until all complete.
+Returns a list of response bodies matching the order of URLS.
+Optionally accepts a TIMEOUT in seconds."
+  (let* ((count (length urls))
+         (results (make-vector count nil))
+         (remaining count)
+         (start-time (float-time)))
+    (cl-loop
+     for url-item in urls
+     for index from 0
+     do (let ((idx index)
+              (url (or (and (consp url-item) (car url-item)) url-item))
+              (retriever (and (consp url-item) (cdr url-item))))
+          (url-retrieve
+           url
+           (lambda (status)
+             (set-buffer-multibyte t)
+             (decode-coding-region (point-min) (point-max) 'utf-8)
+             (goto-char (point-min))
+             (let ((body
+                    (if (re-search-forward "\r?\n\r?\n" nil t)
+                        (if retriever
+                            (funcall retriever (point) (point-max))
+                          (buffer-substring-no-properties (point) (point-max)))
+                      (buffer-string))))
+               (kill-buffer)
+               (aset results idx `(:status ,status :value ,body))
+               (cl-decf remaining))))))
+
+    (while (and (> remaining 0)
+                (or (null timeout)
+                    (< (- (float-time) start-time) timeout)))
+      (accept-process-output nil 0.05))
+
+    (if (> remaining 0)
+        (error "Timed out waiting for %d request(s) to finish" remaining)
+      (append results nil))))
+
 (defmacro with-ndlj-url-retrieve (url &rest body)
   "Retrieve URL into a buffer and run BODY in it."
   (declare (indent 1))
@@ -40,14 +85,16 @@
          ;; TODO: Use `url-retrieve' for asynchronous callbacks:
          (buf (url-retrieve-synchronously ,url)))
      (unless buf
-       (error "Response not received from %s" url))
+       (error "Response not received from %s" ,url))
      (when buf
        (prog1
            (with-current-buffer buf
              (set-buffer-multibyte t)
              (decode-coding-region (point-min) (point-max) 'utf-8)
              (progn ,@body))
-         (kill-buffer buf)))))
+         (kill-buffer buf)
+         (when ndlj-debug
+           (message "Received response from %s" ,url))))))
 
 (defmacro with-ndlj-url-retrieve-html (url &rest body)
   "Retrieve an HTML content from URL into a buffer and run BODY in it.
@@ -57,6 +104,8 @@ Within BODY, the variable `dom' is available for processing."
      (goto-char (point-min))
      (re-search-forward "\r?\n\r?\n" nil t)
      (let ((dom (libxml-parse-html-region (point) (point-max))))
+       (when ndlj-debug
+         (pp dom))
        ,@body)))
 
 (defmacro with-ndlj-url-retrieve-xml (url &rest body)
@@ -67,6 +116,8 @@ Within BODY, the variable `dom' is available for processing."
      (goto-char (point-min))
      (re-search-forward "\r?\n\r?\n" nil t)
      (let ((dom (xml-parse-region (point) (point-max) nil nil nil)))
+       (when ndlj-debug
+         (pp dom))
        ,@body)))
 
 (defun ndlj-sleep (seconds &optional jitter)

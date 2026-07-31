@@ -29,7 +29,6 @@
 (require 'dom)
 (require 'map)
 (require 'seq)
-(require 'time-date)
 (require 'url-parse)
 
 (require 'ndlj-api)
@@ -40,7 +39,7 @@
   :type '(integer :tag "Max item count")
   :group 'ndlj)
 
-(defcustom ndlj-openurl-sleep '(0.10 0.15)
+(defcustom ndlj-openurl-sleep '(0.025 0.25)
   "Sleep in seconds between HTTP calls."
   :type '(choice
           (integer :tag "Sleep in seconds")
@@ -58,7 +57,10 @@
     ("シリーズ著者・編者" . ndlj-openurl--extract-creators)
     ("著者標目" . ndlj-openurl--extract-creator-indices)
     ("件名標目" . ndlj-openurl--extract-topic-term-indices)
-    ("書誌ID（NDLBibID）" . ndlj-openurl--extract-ndl-bib-id)))
+    ("書誌ID（NDLBibID）" . ndlj-openurl--extract-ndl-bib-id)
+    ("NDC8版" . ndlj-openurl--extract-ndc)
+    ("NDC9版" . ndlj-openurl--extract-ndc)
+    ("NDC10版" . ndlj-openurl--extract-ndc)))
 
 (defconst ndlj-openurl-hostname "ndlsearch.ndl.go.jp")
 (defconst ndlj-openurl-api-path "/api/openurl")
@@ -202,27 +204,11 @@
 
 (defun ndlj-openurl--extract-publication-date (node)
   "Process NODE ('dd') as publication date."
-  (let ((pattern "\\([0-9]+\\)\\(\\.\\([0-9]+\\)\\)?\\(\\.\\([0-9]+\\)\\)?")
-        (s (dom-inner-text (dom-by-tag node 'span))))
-    (if (string-match pattern s)
-        (make-decoded-time :year (when-let* ((year (match-string 1 s)))
-                                   (string-to-number year))
-                           :month (when-let* ((month (match-string 3 s)))
-                                    (string-to-number month))
-                           :day (when-let* ((day (match-string 5 s)))
-                                  (string-to-number day)))
-      (ndlj-message "Unparsable date: '%s'" s)
-      s)))
+  (ndlj-api-date-from-str (dom-inner-text (dom-by-tag node 'span))))
 
 (defun ndlj-openurl--extract-publication-year (node)
   "Process NODE ('dd') as publication year."
-  (let ((pattern "\\([0-9]+\\)")
-        (s (dom-inner-text (dom-by-tag node 'span))))
-    (if (string-match pattern s)
-        (make-decoded-time :year (when-let* ((year (match-string 1 s)))
-                                   (string-to-number year)))
-      (ndlj-message "Unparsable date: '%s'" s)
-      s)))
+  (ndlj-api-date-from-str (dom-inner-text (dom-by-tag node 'span))))
 
 (defun ndlj-openurl--extract-publisher (node)
   "Process NODE ('dd') as publisher info alist."
@@ -257,6 +243,36 @@
           (when-let* ((a (dom-by-tag node 'a)))
             `(("URL" . ,(dom-inner-text a))))))
 
+(defun ndlj-openurl--extract-ndc (node)
+  "Process NODE ('dd') as an NDC info."
+  (when-let* ((span (dom-by-tag node 'span))
+              (str (dom-inner-text span)))
+    (if (string-match "\\`\\([0-9/.]+\\)\\( *: *\\(.+\\)\\)?\\'" str)
+        (let ((code (match-string 1 str))
+              (text (match-string 3 str)))
+          (progn
+            (concat code
+                    (if text
+                        (let* ((text (replace-regexp-in-string "[．] *" ". " text))
+                               (text (replace-regexp-in-string " *-- *" " -- " text)))
+                          (concat " " text))
+                      ""))
+            ))
+      (when ndlj-debug (ndlj-message "Unparsable NDC: '%s'" str))
+      str)))
+
+(defun ndlj-openurl-extract-fields (dom)
+  (mapcar
+   (lambda (node)
+     (when-let*
+         ((field (dom-inner-text (dom-by-tag node 'dt)))
+          (value (if-let* ((exf (map-elt ndlj-openurl--field-extractors field)))
+                     (funcall exf (car (dom-by-tag node 'dd)))
+                   (dom-inner-text (dom-by-tag node 'dd)))))
+       `(,field . ,value)))
+   (dom-by-class (dom-by-class dom "pages-books-section-bib-list")
+                 "pages-books-ndls-section-bib-list-item")))
+
 (defun ndlj-openurl-book-creators (rec)
   "Render CREATORS and SERIES-CREATORS as :creators.
 When given, CREATOR-INDICES holds creator index (著者標目) entries."
@@ -285,62 +301,57 @@ When given, CREATOR-INDICES holds creator index (著者標目) entries."
                    (given-name . ,(map-elt creator 'given-name))))))
             (append creators series-creators))))
 
-(defun ndlj-openurl-book-date (rec)
-  "Render date from REC."
-  (let ((date (map-elt rec "出版年月日等")))
-    (if (stringp date)
-        date
-      (format-time-string
-       (cond ((and (decoded-time-year date)
-                   (decoded-time-month date)
-                   (decoded-time-day date))
-              "%Y-%m-%d")
-             ((and (decoded-time-year date)
-                   (decoded-time-month date))
-              "%Y-%m")
-             ((decoded-time-year date)
-              "%Y")
-             (t "%Y-%m-%d"))
-       (encode-time (decoded-time-set-defaults date))))))
+(defun ndlj-openurl-book-extra (rec)
+  "Get extra from REC for the book item."
+  (append
+   (when-let* ((ndl-bib-id (map-elt (map-elt rec "書誌ID（NDLBibID）") "NDLBibID")))
+     `(("NDLBibID" . ,ndl-bib-id)))
+   (when-let* ((ndc8 (map-elt rec "NDC8版")))
+     `(("NDC8" . ,ndc8)))
+   (when-let* ((ndc9 (map-elt rec "NDC9版")))
+     `(("NDC9" . ,ndc9)))
+   (when-let* ((ndc10 (map-elt rec "NDC10版")))
+     `(("NDC10" . ,ndc10)))))
 
+(defun ndlj-openurl-book-tags (rec)
+  "Get tags from REC for the book item."
+  (flatten-list
+   (seq-uniq
+    (append
+     (mapcar
+      (lambda (str)
+        (cdr (string-split str "\\([.] \\|--\\)" t "\\s-+")))
+      (append (when (map-elt rec "NDC9版") `(,(map-elt rec "NDC9版")))
+              (when (map-elt rec "NDC10版") `(,(map-elt rec "NDC10版")))))
+     (mapcar
+      (lambda (it)
+        (cond ((map-elt it "氏名")
+               (map-elt it "氏名"))
+              ((and (map-elt it "氏") (map-elt it "名"))
+               (concat (map-elt it "氏") " " (map-elt it "名")))
+              (t
+               (string-split (map-elt it "件名") "--" 'omit-empty "\\s-+"))))
+      (map-elt rec "件名標目"))))))
+
+;;;###autoload
 (defun ndlj-openurl-bib-item-get (search-result-item)
   "Get an item as alist from SEARCH-RESULT-ITEM."
   (let* ((item-url (map-elt search-result-item 'item-url))
          (rec (with-ndlj-url-retrieve-html item-url
-                (mapcar
-                 (lambda (node)
-                   (when-let*
-                       ((field (dom-inner-text (dom-by-tag node 'dt)))
-                        (value (if-let* ((exf (map-elt ndlj-openurl--field-extractors field)))
-                                   (funcall exf (car (dom-by-tag node 'dd)))
-                                 (dom-inner-text (dom-by-tag node 'dd)))))
-                     `(,field . ,value)))
-                 (dom-by-class (dom-by-class dom "pages-books-section-bib-list")
-                               "pages-books-ndls-section-bib-list-item")))))
+                (ndlj-openurl-extract-fields dom))))
     (append
      `((ndl:url . ,item-url)
        (material-type . ,(map-elt rec "資料種別")))
-     (let* ((title (map-elt rec "タイトル"))
-            (short-title (and (string-match "\\( *[:：]+ *\\)" title)
-                              (ndlj-string-normalize-ja
-                               (substring title 0 (match-beginning 1)))))
-            (series-title (when-let* ((s (map-elt rec "シリーズタイトル")))
-                            (ndlj-string-normalize-ja s)))
-            (title (ndlj-string-normalize-ja (string-replace ":" " " title))))
-       (append (when title `((title . ,title)))
-               (when (< (length short-title) (length title))
-                 `((short-title . ,short-title)))))
+     (let-alist (ndlj-api-book-titles (map-elt rec "タイトル")
+                                      (map-elt rec "シリーズタイトル"))
+       `((title . ,.title)
+         (short-title . ,.short-title)))
      (when-let* ((volume (map-elt rec "巻次・部編番号")))
        `((volume . ,volume)))
      `((creators . ,(ndlj-openurl-book-creators rec)))
-     (when-let* ((s (map-elt rec "シリーズタイトル")))
-       (let* ((parts (when (string-match "[ \t]*[;][ \t]*" s)
-                       (cons (substring s 0 (match-beginning 0))
-                             (substring s (match-end 0)))))
-              (series (or (car parts) s))
-              (series-number (cdr parts)))
-         (append (when series `((series . ,series)))
-                 (when series-number `((series-number . ,series-number))))))
+     (let-alist (ndlj-api-book-series (map-elt rec "シリーズタイトル"))
+       (append (when .series `((series . ,.series)))
+               (when .series-number `((series-number . ,.series-number)))))
      `((edition . ,(map-elt rec "版")))
      (let* ((item (seq-find (lambda (it)
                               (let ((etc (map-elt it "その他")))
@@ -350,30 +361,15 @@ When given, CREATOR-INDICES holds creator index (著者標目) entries."
             (place (map-elt item "所在地")))
        (append (when publisher `((publisher . ,publisher)))
                (when place `((place . ,place)))))
-     `((date . ,(ndlj-openurl-book-date rec))
+     `((date . ,(map-elt rec "出版年月日等"))
        (num-pages . ,(let ((it (map-elt rec "数量")))
                        (if (string= (map-elt it "単位") "p")
                            (map-elt it "数量"))))
        (isbn . ,(map-elt rec "ISBN"))
        (language . ,(map-elt rec "本文の言語コード"))
        (call-number . ,(map-elt rec "請求記号"))
-       (extra . (("NDLBibID" . ,(map-elt (map-elt rec "書誌ID（NDLBibID）") "NDLBibID"))))
-       (tags . ,(append
-                 (mapcar
-                  (lambda (s)
-                    (when (string-match "\\`.*: *\\(?1:.+\\)\\'" s)
-                      (string-split (match-string 1 s) "\\([．]\\|--\\)" t "\\s-+")))
-                  (append (when (map-elt rec "NDC9版") `(,(map-elt rec "NDC9版")))
-                          (when (map-elt rec "NDC10版") `(,(map-elt rec "NDC10版")))))
-                 (mapcar
-                  (lambda (it)
-                    (cond ((map-elt it "氏名")
-                           (map-elt it "氏名"))
-                          ((and (map-elt it "氏") (map-elt it "名"))
-                           (concat (map-elt it "氏") " " (map-elt it "名")))
-                          (t
-                           (string-split (map-elt it "件名") "--" 'omit-empty "\\s-+"))))
-                  (map-elt rec "件名標目"))))))))
+       (extra . ,(ndlj-openurl-book-extra rec))
+       (tags . ,(ndlj-openurl-book-tags rec))))))
 
 ;;; Search Query
 
@@ -446,6 +442,7 @@ When given, CREATOR-INDICES holds creator index (著者標目) entries."
             (by-class (car (by-class dom "search-result-body"))
                       "search-result-item"))))))))
 
+;;;###autoload
 (cl-defun ndlj-openurl-search-query (&key any title creator dpid)
   "Make an OpenURL search query.
 ANY maps to the query parameter 'any'.

@@ -23,6 +23,8 @@
 ;;
 ;;; Code:
 
+(require 'time-date)
+
 (require 'ndlj-util)
 
 (defconst ndlj-api-regexp-roles
@@ -31,13 +33,41 @@
 (defconst ndlj-api--regexp-year
   "\\([0-9]\\{1,4\\}\\)\\(B\\. ?C\\.?\\|A\\. ?D\\.?\\)?")
 
-(defun ndlj-api-zotero-item-entry (value field &optional processors)
-  "Render VALUE for FIELD as a kay-value pair for plist.
-Applies a FIELD function from PROCESSORS if exists."
-  (when value
-    `(,field ,(if-let* ((processor (map-elt processors field)))
-                  (funcall processor value)
-                value))))
+(defun ndlj-api-date-from-str (str)
+  "Parse STR to get a decoded-time object."
+  (if (string-match "\\([0-9]+\\)\\(\\.\\([0-9]+\\)\\)?\\(\\.\\([0-9]+\\)\\)?"
+                    str)
+      (make-decoded-time :year (when-let* ((year (match-string 1 str)))
+                                 (string-to-number year))
+                         :month (when-let* ((month (match-string 3 str)))
+                                  (string-to-number month))
+                         :day (when-let* ((day (match-string 5 str)))
+                                (string-to-number day)))
+    (ndlj-message "Unparsable date: '%s'" str)
+    str))
+
+(defun ndlj-api-book-titles (title &optional series-title)
+  "Parse TITLE and optionally SERIES-TITLE to get title and short title."
+  (let* ((short-title (and (string-match "\\( *[:：]+ *\\)" title)
+                           (ndlj-string-normalize-ja
+                            (substring title 0 (match-beginning 1)))))
+         (series-title (when series-title
+                         (ndlj-string-normalize-ja series-title)))
+         (title (ndlj-string-normalize-ja (string-replace ":" " " title))))
+    (append (when title `((title . ,title)))
+            (when (< (length short-title) (length title))
+              `((short-title . ,short-title))))))
+
+(defun ndlj-api-book-series (series-title)
+  "Parse SERIES-TITLE to get series and series number."
+  (when-let* ((str series-title)
+              (parts (when (string-match "[ \t]*[;][ \t]*" str)
+                       (cons (substring str 0 (match-beginning 0))
+                             (substring str (match-end 0))))))
+    (if parts
+        `((series . ,(car parts))
+          (series-number . ,(cdr parts)) )
+      `((series . ,str)))))
 
 (defun ndlj-api-parse-creator (str)
   "Parse STR and return a list of creator name/role alist for ITEM-TYPE."

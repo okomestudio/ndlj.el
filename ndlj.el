@@ -49,7 +49,7 @@
   :group 'convenience
   :prefix "ndlj-")
 
-(defcustom ndlj-debug t
+(defcustom ndlj-debug nil
   "Debug switch."
   :type 'boolean
   :group 'ndlj)
