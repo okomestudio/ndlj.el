@@ -273,34 +273,6 @@
    (dom-by-class (dom-by-class dom "pages-books-section-bib-list")
                  "pages-books-ndls-section-bib-list-item")))
 
-(defun ndlj-openurl-book-creators (rec)
-  "Render CREATORS and SERIES-CREATORS as :creators.
-When given, CREATOR-INDICES holds creator index (著者標目) entries."
-  (let ((creators (map-elt rec "著者・編者"))
-        (series-creators (mapcar
-                          (lambda (it) (cons '(series .  t) it))
-                          (map-elt rec "シリーズ著者・編者")))
-        (creator-entities (mapcar
-                           (lambda (it)
-                             (let ((key (concat (map-elt it 'surname)
-                                                (map-elt it 'given-name))))
-                               `(,key . ,it)))
-                           (map-elt rec "著者標目"))))
-    (mapcar (lambda (creator)
-              (append
-               `((role . ,(let ((role (map-elt creator 'role)))
-                            (if (map-elt creator 'series)
-                                (concat "シリーズ" role)
-                              role))))
-               (if-let* ((fullname (map-elt creator 'fullname)))
-                   (if-let* ((ce (map-elt creator-entities fullname)))
-                       `((surname . ,(map-elt ce 'surname))
-                         (given-name . ,(map-elt ce 'given-name)))
-                     `((fullname . ,fullname)))
-                 `((surname . ,(map-elt creator 'surname))
-                   (given-name . ,(map-elt creator 'given-name))))))
-            (append creators series-creators))))
-
 (defun ndlj-openurl-book-extra (rec)
   "Get extra from REC for the book item."
   (append
@@ -348,7 +320,12 @@ When given, CREATOR-INDICES holds creator index (著者標目) entries."
          (short-title . ,.short-title)))
      (when-let* ((volume (map-elt rec "巻次・部編番号")))
        `((volume . ,volume)))
-     `((creators . ,(ndlj-openurl-book-creators rec)))
+     `((creators . ,(ndlj-api-book-creators
+                     :creators (map-elt rec "著者・編者")
+                     :series-creators (mapcar
+                                       (lambda (it) (cons '(series .  t) it))
+                                       (map-elt rec "シリーズ著者・編者"))
+                     :creator-entities (map-elt rec "著者標目"))))
      (let-alist (ndlj-api-book-series (map-elt rec "シリーズタイトル"))
        (append (when .series `((series . ,.series)))
                (when .series-number `((series-number . ,.series-number)))))

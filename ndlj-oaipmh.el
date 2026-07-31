@@ -48,30 +48,6 @@ REPO-ITEM-ID is of form `R<number>-I<number>'."
                   node)))
             (dom-by-tag dom tag)))
 
-(defun ndlj-oaipmh-book-creators (dom)
-  (let ((creators
-         (apply #'append
-                (seq-keep (lambda (it)
-                            (ndlj-api-parse-creator (dom-inner-text it)))
-                          (dom-by-tag dom 'dc:creator))))
-        (creator-entities
-         (mapcar (lambda (it)
-                   (cons (concat (map-elt it 'surname) (map-elt it 'given-name))
-                         it))
-                 (seq-keep (lambda (it)
-                             (ndlj-api-parse-entity-person-name
-                              (dom-inner-text (dom-by-tag it 'foaf:name))))
-                           (dom-by-tag dom 'dcterms:creator)))))
-    (mapcar (lambda (it)
-              (append
-               `((role . ,(map-elt it 'role)))
-               (if-let* ((fullname (map-elt it 'fullname))
-                         (ce (map-elt creator-entities fullname)))
-                   `((surname . ,(map-elt ce 'surname))
-                     (given-name . ,(map-elt ce 'given-name)) )
-                 `((fullname . ,(map-elt it 'fullname)) ))))
-            creators)))
-
 (defun ndlj-oaipmh-book-extra (dom)
   (append
    (when-let* ((resource "\\`http://id.ndl.go.jp/class/ndc10/\\(.*\\)")
@@ -109,7 +85,29 @@ REPO-ITEM-ID is of form `R<number>-I<number>'."
        `((title . ,.title)
          (short-title . ,.short-title)))
      `((volume . ,(dom-inner-text (dom-by-tag (dom-by-tag rec 'dcndl:volume) 'rdf:value))))
-     `((creators . ,(ndlj-oaipmh-book-creators rec)))
+     (let ((creators
+            (apply #'append
+                   (seq-keep #'ndlj-api-parse-creator
+                             (mapcar #'dom-inner-text
+                                     (dom-by-tag rec 'dc:creator)))))
+           (series-creators
+            (seq-keep (lambda (em)
+                        (when em
+                          (cons '(series . t) em)))
+                      (apply #'append
+                             (mapcar #'ndlj-api-parse-creator
+                                     (mapcar #'dom-inner-text
+                                             (dom-by-tag rec 'dcndl:seriesCreator))))))
+           (creator-entities
+            (seq-keep #'ndlj-api-parse-entity-person-name
+                      (mapcar #'dom-inner-text
+                              (mapcar (lambda (it)
+                                        (dom-by-tag it 'foaf:name))
+                                      (dom-by-tag rec 'dcterms:creator))))))
+       `((creators . ,(ndlj-api-book-creators
+                       :creators creators
+                       :series-creators series-creators
+                       :creator-entities creator-entities))))
      (let-alist (ndlj-api-book-series
                  (dom-inner-text (dom-by-tag (dom-by-tag rec 'dcndl:seriesTitle) 'rdf:value)))
        (append (when .series `((series . ,.series)))
