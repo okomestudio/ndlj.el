@@ -79,14 +79,23 @@
 
 (defcustom ndlj-item-material-types-abbrev
   '(("図書" . "図")
-    ("電子書籍・電子雑誌" . "電")
-    ("録音資料" . "録")
     ("雑誌" . "雑")
-    ("雑誌タイトル" . "雑タ")
-    ("記事" . "記")
-    ("児童書" . "児")
+    ("新聞" . "新")
+    ("和古書・漢籍" . "和漢")
+    ("博士論文" . "博")
+    ("地図" . "地")
+    ("楽譜" . "楽")
+    ("Webサイト" . "Ｗ")
+    ("電子書籍・電子雑誌" . "電書")
+    ("電子資料" . "電")
     ("映像資料" . "映")
-    ("博士論文" . "博"))
+    ("録音資料" . "録")
+    ("規格・テクニカルリポート類" . "テ")
+    ("文書・図像類" . "図")
+    ("記事" . "記")
+    ;; No explicit mentions of items below in the help page:
+    ("雑誌タイトル" . "雑タ")
+    ("児童書" . "児"))
   "Item material types and their abbreviations."
   :type '(repeat (cons (string :tag "種類種別")
                        (string :tag "省略形")))
@@ -109,7 +118,7 @@
 ;;; Constants
 
 (defconst ndlj-data-providers
-  '("zassaku" "iss-ndl-opac")
+  '("iss-ndl-opac" "iss-yunika" "zassaku")
   "All available data providers.")
 
 ;;; Completion Interface
@@ -141,7 +150,13 @@
                                            .page))
                                (round (* width 0.80)))))
              (suffix
-              (concat (s-align (or .material-types "") width 'right))))
+              (concat (s-align (or (mapconcat
+                                    (lambda (it)
+                                      (map-elt ndlj-item-material-types-abbrev it it))
+                                    .material-types
+                                    "/")
+                                   "")
+                               width 'right))))
         `(,completion ,prefix ,suffix)))))
 
 (defun ndlj--completing-read (search-result-items)
@@ -239,6 +254,14 @@ Invoke this command with a prefix argument to switch data providers."
   (ndlj-query--command :any query))
 
 ;;;###autoload
+(defun ndlj-search-any-visit (query)
+  "Visit the item web page from QUERY."
+  (interactive "sNDL search (any): ")
+  (when-let* ((url (map-elt (ndlj-query--command :any query) 'ndl:item-url)))
+    (ndlj-message "Visiting item web page at %s..." url)
+    (browse-url url)))
+
+;;;###autoload
 (defun ndlj-search-creator (query)
   "Perform 'creator' search for QUERY.
 Invoke this command with a prefix argument to switch data providers."
@@ -251,13 +274,6 @@ Invoke this command with a prefix argument to switch data providers."
 Invoke this command with a prefix argument to switch data providers."
   (interactive "sNDL search (title): ")
   (ndlj-query--command :title query))
-
-;;;###autoload
-(defun ndlj-search-any-visit (query)
-  "Visit the item web page from QUERY."
-  (interactive "sNDL search (any): ")
-  (when-let* ((url (map-elt (ndlj-query--command :any query) "ndl:url")))
-    (browse-url url)))
 
 (provide 'ndlj)
 ;;; ndlj.el ends here

@@ -27,6 +27,7 @@
 
 (require 'cl-lib)
 (require 'dom)
+(require 'japan-util)
 (require 'url)
 (require 'url-expand)
 (require 'url-util)
@@ -221,6 +222,10 @@ nodes found."
     (if reducer (funcall reducer results) results)))
 
 ;;; String Operations
+
+(defun ndlj-str-norm (str)
+  "Normalize STR."
+  (japanese-hankaku str 'ascii-only))
 
 (defun ndlj-string-normalize-ja (str)
   "Normalize STR with standard Japanese characters (typically zenkaku)."

@@ -40,16 +40,17 @@
 
 (defun ndlj-api-date-from-str (str)
   "Parse STR to get a decoded-time object."
-  (if (string-match "\\([0-9]+\\)\\(\\.\\([0-9]+\\)\\)?\\(\\.\\([0-9]+\\)\\)?"
-                    str)
-      (make-decoded-time :year (when-let* ((year (match-string 1 str)))
-                                 (string-to-number year))
-                         :month (when-let* ((month (match-string 3 str)))
-                                  (string-to-number month))
-                         :day (when-let* ((day (match-string 5 str)))
-                                (string-to-number day)))
-    (ndlj-message "Unparsable date: '%s'" str)
-    str))
+  (let ((str (ndlj-str-norm str)))
+    (if (string-match "\\([0-9]+\\)\\([-.]\\([0-9]+\\)\\)?\\([-.]\\([0-9]+\\)\\)?"
+                      str)
+        (make-decoded-time :year (when-let* ((year (match-string 1 str)))
+                                   (string-to-number year))
+                           :month (when-let* ((month (match-string 3 str)))
+                                    (string-to-number month))
+                           :day (when-let* ((day (match-string 5 str)))
+                                  (string-to-number day)))
+      (ndlj-message "Unparsable date: '%s'" str)
+      str)))
 
 (defun ndlj-api-parse-creator (str)
   "Parse STR and return a list of creator name/role alist for ITEM-TYPE."
