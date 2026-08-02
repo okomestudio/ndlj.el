@@ -41,6 +41,43 @@ REPO-ITEM-ID is of form `R<number>-I<number>'."
                                 (metadataPrefix . ("dcndl_v3"))
                                 (identifier . (,identifier))))))
 
+(defun ndlj-oaipmh-magazine-article-item-get (search-result-item)
+  (let* ((item-url (map-elt search-result-item 'item-url))
+         (repo-item-url (ndlj-oaipmh-url-get-record
+                         (map-elt search-result-item 'repo-item-id)))
+         (results (ndlj-url-retrieve-gather
+                   `((,repo-item-url . ndlj-url-retrieve-as-xml))))
+         (rec (dom-by-tag (plist-get (nth 0 results) :value) 'record)))
+    (seq-filter
+     #'cdr
+     (append
+      `((ndl:item-url . ,item-url)
+        (material-type . ,(ndlj-dom-by-path-attr rec 'dcndl:materialType 'rdfs:label)))
+      (let-alist (ndlj-api-book-titles
+                  (ndlj-dom-by-path rec '(dc:title rdf:value))
+                  (ndlj-dom-by-path rec '(dcndl:seriesTitle rdf:value)))
+        `((title . ,.title)
+          (short-title . ,.short-title)))
+      `((creators . ,(ndlj-api-creators
+                      :creators (ndlj-dom-by-path rec 'dc:creator :reducer nil)
+                      :entities (ndlj-dom-by-path rec '(dcterms:creator foaf:name) :reducer nil))))
+      (let-alist (ndlj-api-publisher-parse
+                  (ndlj-dom-by-path rec '(dcterms:publisher foaf:name)))
+        `((publisher . ,.publisher)
+          (place . ,.place)))
+      `((date . ,(ndlj-api-date-from-str (ndlj-dom-by-path rec 'dcterms:issued)))
+        (publication-title . ,(ndlj-dom-by-path rec '(dcndl:publicationName rdf:value)))
+        (volume . ,(ndlj-dom-by-path rec '(dcndl:publicationName dcndl:publicationVolume)))
+        (issue . ,(ndlj-dom-by-path rec '(dcndl:publicationName dcndl:number)))
+        (pages . ,(ndlj-dom-by-path rec '(dcndl:publicationName dcndl:pageRange)))
+        (language . ,(ndlj-dom-by-path rec 'dcterms:language))
+        (call-number . ,(ndlj-dom-by-path rec 'dcndl:callNumber))
+        (extra
+         . (("NDLBibID" . ,(ndlj-dom-by-tag-by-attr rec 'dcterms:identifier 'rdf:datatype
+                                                    "http://ndl.go.jp/dcndl/terms/NDLBibID"))
+            ("NDLRepoID" . ,(ndlj-dom-by-path rec 'dcndl:bibRecordCategory)))))
+      ))))
+
 (defun ndlj-oaipmh-book-extra (dom)
   (append
    (when-let* ((resource "\\`http://id.ndl.go.jp/class/ndc10/\\(.*\\)")
@@ -52,9 +89,7 @@ REPO-ITEM-ID is of form `R<number>-I<number>'."
                (n (ndlj-dom-by-tag-by-attr dom 'dcterms:identifier 'rdf:datatype resource)))
      `(("NDLBibID" . ,(dom-inner-text n))))))
 
-;;;###autoload
-(defun ndlj-oaipmh-bib-item-get (search-result-item)
-  "Get an item as alist from SEARCH-RESULT-ITEM."
+(defun ndlj-oaipmh-book-item-get (search-result-item)
   (let* ((item-url (map-elt search-result-item 'item-url))
          (repo-item-url (ndlj-oaipmh-url-get-record
                          (map-elt search-result-item 'repo-item-id)))
@@ -73,26 +108,16 @@ REPO-ITEM-ID is of form `R<number>-I<number>'."
     (seq-filter
      #'cdr
      (append
-      `((ndl:url . ,item-url)
+      `((ndl:item-url . ,item-url)
         (material-type . ,(ndlj-dom-by-path-attr rec 'dcndl:materialType 'rdfs:label)))
       (let-alist (ndlj-api-book-titles (ndlj-dom-by-path rec '(dc:title rdf:value)))
         `((title . ,.title)
           (short-title . ,.short-title)))
-      `((volume . ,(ndlj-dom-by-path rec '(dcndl:volume rdf:value))))
-      (let ((creators
-             (mapcan #'ndlj-api-parse-creator
-                     (ndlj-dom-by-path rec 'dc:creator :reducer nil)))
-            (series-creators
-             (mapcan (lambda (it)
-                       (mapcar (lambda (em) (cons '(series . t) em))
-                               (ndlj-api-parse-creator it)))
-                     (ndlj-dom-by-path rec 'dcndl:seriesCreator :reducer nil)))
-            (creator-entities
-             (mapcar #'ndlj-api-parse-entity-person-name
-                     (ndlj-dom-by-path rec '(dcterms:creator foaf:name) :reducer nil))))
-        `((creators . ,(ndlj-api-book-creators :creators creators
-                                               :series-creators series-creators
-                                               :creator-entities creator-entities))))
+      `((volume . ,(ndlj-dom-by-path rec '(dcndl:volume rdf:value)))
+        (creators . ,(ndlj-api-creators
+                      :creators (ndlj-dom-by-path rec 'dc:creator :reducer nil)
+                      :series-creators (ndlj-dom-by-path rec 'dcndl:seriesCreator :reducer nil)
+                      :entities (ndlj-dom-by-path rec '(dcterms:creator foaf:name) :reducer nil))))
       (let-alist (ndlj-api-book-series
                   (ndlj-dom-by-path rec '(dcndl:seriesTitle rdf:value)))
         (append (when .series `((series . ,.series)))
@@ -114,8 +139,19 @@ REPO-ITEM-ID is of form `R<number>-I<number>'."
          . ,(seq-uniq
              (append tags
                      (mapcan #'ndlj-api-tags-from-topic
-                             (ndlj-dom-by-path rec '(dcterms:subject rdf:value) :reducer nil)))))
-        )))))
+                             (ndlj-dom-by-path rec '(dcterms:subject rdf:value) :reducer nil))))))
+      ))))
+
+;;;###autoload
+(defun ndlj-oaipmh-bib-item-get (search-result-item)
+  "Get an item as alist from SEARCH-RESULT-ITEM."
+  (let ((material-types (map-elt search-result-item 'material-types)))
+    (cond
+     ((seq-intersection '("記事") material-types)
+      (ndlj-oaipmh-magazine-article-item-get search-result-item))
+     ((seq-intersection '("図書") material-types)
+      (ndlj-oaipmh-book-item-get search-result-item))
+     (t (ndlj-message "Unknwon material types: '%s'" material-types)))))
 
 (provide 'ndlj-oaipmh)
 ;;; ndlj-oaipmh.el ends here

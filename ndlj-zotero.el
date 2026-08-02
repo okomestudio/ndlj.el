@@ -51,46 +51,6 @@
                ("写真" . "author")
                ("シリーズ編" . "seriesEditor")))))
 
-;; (defun ndlj-zotero-article--create (item)
-;;   "Create an article from ITEM."
-;;   (let ((creator-indices (ndlj-zotero--creator-indices (map-elt item "著者標目"))))
-;;     (append
-;;      '( :itemType "magazineArticle" )
-;;      (ndlj-zotero--json-title (map-elt item "タイトル")
-;;                               (map-elt item "シリーズタイトル"))
-;;      (ndlj-zotero--json-creators (map-elt item "著者・編者")
-;;                                  (map-elt item "シリーズ著者・編者")
-;;                                  creator-indices)
-;;      `( :publicationTitle ,(map-elt item "タイトル（掲載誌）") )
-;;      (ndlj-zotero--json-publisher (map-elt item "出版事項（掲載誌）"))
-;;      (ndlj-zotero--json-date (map-elt item "掲載年月日（W3CDTF）"))
-;;      `( :volume ,(map-elt item "掲載巻")
-;;         :issue ,(map-elt item "掲載号")
-;;         :pages ,(map-elt item "掲載ページ") )
-;;      (ndlj-zotero--json-language (map-elt item "本文の言語コード"))
-;;      `( :libraryCatalog "NDL Search"
-;;         :callNumber ,(map-elt item "請求記号") )
-;;      (ndlj-zotero--json-extra
-;;       `(("NDLBibID" . ,(map-elt (map-elt item "書誌ID（NDLBibID）") "NDLBibID")))))))
-
-(defun ndlj-zotero-item-magazine-article (rec)
-  "Transform a record dom REC into a Zotero magazineArticle item."
-  (append
-   '( :itemType "magazineArticle"
-      :title nil
-      :creators nil
-      :publicatonTitle nil
-      :publisher nil
-      :date nil
-      :volume nil
-      :issue nil
-      :pages nil
-      :language nil
-      :libraryCatalog nil
-      :callNumber nil
-      :tags nil
-      :extra nil )))
-
 (defun ndlj-zotero-date-render (date)
   "Render DATE for JSON."
   (if (stringp date)
@@ -108,59 +68,88 @@
            (t "%Y-%m-%d"))
      (encode-time (decoded-time-set-defaults date)))))
 
+(defun ndlj-zotero-language-render (lang)
+  (pcase lang
+    ("jpn" "ja")
+    ("eng" "en")
+    (_ lang)))
+
+(defun ndlj-zotero-keep-non-nil (plis)
+  (map-into (map-filter (lambda (_ v) v) plis) 'plist))
+
+(defun ndlj-zotero-creator-render (item-type rec)
+  (ndlj-zotero-keep-non-nil
+   `( :creatorType
+      ,(if-let* ((role (map-elt rec 'role)))
+           (if-let* ((role (if-let* ((_ (map-elt rec 'series)))
+                               (concat "シリーズ" role)
+                             role))
+                     (role (map-elt (map-elt ndlj-zotero-roles item-type) role)))
+               role
+             (ndlj-message "Unknown role: %s" role)
+             role)
+         (ndlj-message "Missing role for: %s" rec)
+         "author")
+      :name ,(map-elt rec 'fullname)
+      :lastName ,(map-elt rec 'surname)
+      :firstName ,(map-elt rec 'given-name) )))
+
+(defun ndlj-zotero-extra-render (alis)
+  (string-join (map-apply (lambda (k v) (format "%s: %s" k v))
+                          (seq-filter #'cdr alis))
+               "\n"))
+
+(defun ndlj-zotero-item-magazine-article (rec)
+  "Transform a record dom REC into a Zotero magazineArticle item."
+  (let ((item-type "magazineArticle"))
+    (ndlj-zotero-keep-non-nil
+     `( :itemType ,item-type
+        :title ,(map-elt rec 'title)
+        :shortTitle ,(map-elt rec 'short-title)
+        :creators ,(cl-map 'vector
+                           (apply-partially #'ndlj-zotero-creator-render item-type)
+                           (map-elt rec 'creators))
+        :publicationTitle ,(map-elt rec 'publication-title)
+        :publisher ,(map-elt rec 'publisher)
+        :place ,(map-elt rec 'place)
+        :date ,(ndlj-zotero-date-render (map-elt rec 'date))
+        :volume ,(map-elt rec 'volume)
+        :issue ,(map-elt rec 'issue)
+        :pages ,(map-elt rec 'pages)
+        :language ,(ndlj-zotero-language-render (map-elt rec 'language))
+        :libraryCatalog "NDL Search"
+        :callNumber ,(map-elt rec 'call-number)
+        :extra ,(ndlj-zotero-extra-render (map-elt rec 'extra))
+        :tags nil))))
+
 (defun ndlj-zotero-item-book (rec)
   "Transform a record dom REC into a Zotero book item."
   (let ((item-type "book"))
-    (map-into
-     (map-filter
-      (lambda (_ val) val)
-      `( :itemType ,item-type
-         :title ,(map-elt rec 'title)
-         :shortTitle ,(map-elt rec 'short-title)
-         :volume ,(map-elt rec 'volume)
-         :creators
-         ,(cl-map 'vector
-                  (lambda (it)
-                    (append
-                     `( :creatorType
-                        ,(let ((role (map-elt it 'role)))
-                           (if-let* ((ct (map-elt (map-elt ndlj-zotero-roles item-type) role)))
-                               ct
-                             (ndlj-message "Unknown role: '%s'" role)
-                             role)) )
-                     (when-let* ((fullname (map-elt it 'fullname)))
-                       `( :name ,fullname ))
-                     (when-let* ((surname (map-elt it 'surname)))
-                       `( :lastName ,surname ))
-                     (when-let* ((given-name (map-elt it 'given-name)))
-                       `( :firstName ,given-name ))))
-                  (map-elt rec 'creators))
-         :series ,(map-elt rec 'series)
-         :seriesNumber ,(map-elt rec 'series-number)
-         :edition ,(map-elt rec 'edition)
-         :publisher ,(map-elt rec 'publisher)
-         :place ,(map-elt rec 'place)
-         :date ,(ndlj-zotero-date-render (map-elt rec 'date))
-         :numPages ,(map-elt rec 'num-pages)
-         :isbn ,(map-elt rec 'isbn)
-         :language ,(let ((lang (map-elt rec 'language)))
-                      (pcase lang
-                        ("jpn" "ja")
-                        ("eng" "en")
-                        (_ lang)))
-         :libraryCatalog "NDL Search"
-         :callNumber ,(map-elt rec 'call-number)
-         :extra ,(string-join
-                  (seq-keep (lambda (it)
-                              (when-let* ((k (car it)) (v (cdr it)))
-                                (format "%s: %s" k v)))
-                            (map-elt rec 'extra))
-                  "\n")
-         :tags ,(cl-map 'vector
-                        (lambda (tag)
-                          `( :tag ,tag ))
-                        (flatten-list (seq-uniq (map-elt rec 'tags))))))
-     'plist)))
+    (ndlj-zotero-keep-non-nil
+     `( :itemType ,item-type
+        :title ,(map-elt rec 'title)
+        :shortTitle ,(map-elt rec 'short-title)
+        :volume ,(map-elt rec 'volume)
+        ;; :creators ,(cl-map 'vector #'ndlj-zotero-creator-render (map-elt rec 'creators))
+        :creators ,(cl-map 'vector
+                           (apply-partially #'ndlj-zotero-creator-render item-type)
+                           (map-elt rec 'creators))
+        :series ,(map-elt rec 'series)
+        :seriesNumber ,(map-elt rec 'series-number)
+        :edition ,(map-elt rec 'edition)
+        :publisher ,(map-elt rec 'publisher)
+        :place ,(map-elt rec 'place)
+        :date ,(ndlj-zotero-date-render (map-elt rec 'date))
+        :numPages ,(map-elt rec 'num-pages)
+        :isbn ,(map-elt rec 'isbn)
+        :language ,(ndlj-zotero-language-render (map-elt rec 'language))
+        :libraryCatalog "NDL Search"
+        :callNumber ,(map-elt rec 'call-number)
+        :extra ,(ndlj-zotero-extra-render (map-elt rec 'extra))
+        :tags ,(cl-map 'vector
+                       (lambda (tag)
+                         `( :tag ,tag ))
+                       (flatten-list (seq-uniq (map-elt rec 'tags))))))))
 
 ;;; Interactive Commands
 
@@ -168,15 +157,29 @@
 (defun ndlj-zotero-create-item ()
   "Create a Zotero item obtained from QUERY."
   (interactive)
-  (when-let* ((item (call-interactively #'ndlj-search-any)))
-    (let ((json (funcall (pcase (map-elt item 'material-type)
-                           ("記事" #'ndlj-zotero-item-magazine-article)
-                           ("図書" #'ndlj-zotero-item-book)
-                           (_ #'ndlj-zotero-item-book))
-                         item)))
+  (when-let* ((item (call-interactively #'ndlj-search-any))
+              (material-type (map-elt item 'material-type)))
+    (when ndlj-debug
+      (pp item))
+    (let* ((fun (cond
+                 ((member material-type '("記事" "記事・論文"))
+                  #'ndlj-zotero-item-magazine-article)
+                 ((member material-type '("図書"))
+                  #'ndlj-zotero-item-book)
+                 (t #'identity)))
+           (json (funcall fun item)))
       (when ndlj-debug
         (pp json))
-      (zotero-create-item json))))
+      (let* ((resp (zotero-create-item json))
+             (payload (zotero-response-data resp)))
+        (cond ((map-nested-elt payload '(:success :0))
+               (ndlj-message "Created Zotero item: '%s'"
+                             (map-nested-elt payload '(:success :0))))
+              ((map-nested-elt payload '(:failed :0))
+               (ndlj-message "Creating Zotero item failed: %s"
+                             (map-nested-elt payload '(:failed :0))))
+              (t
+               (ndlj-message "Error: %s" payload)))))))
 
 (provide 'ndlj-zotero)
 ;;; ndlj-zotero.el ends here

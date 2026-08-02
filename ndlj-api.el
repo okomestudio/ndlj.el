@@ -52,6 +52,14 @@
       (ndlj-message "Unparsable date: '%s'" str)
       str)))
 
+(defun ndlj-api-publisher-parse (str)
+  "Parse STR to get publisher, place, and role."
+  (let ((re "\\`\\(\\(?2:[^ :]+\\) *: *\\)?\\(?3:[^ (]+\\)\\( *(\\(?5:[^)]+\\)) *\\)?\\'"))
+    (when (string-match re str)
+      `((place . ,(match-string 2 str))
+        (publisher . ,(match-string 3 str))
+        (role . ,(match-string 5 str))))))
+
 (defun ndlj-api-parse-creator (str)
   "Parse STR and return a list of creator name/role alist for ITEM-TYPE."
   (if-let* ((pattern (format "\\`\\(?1:.*?\\)\\( +\\[?\\(?3:%s\\)\\]?\\)?\\'"
@@ -122,31 +130,36 @@
 
 (defun ndlj-api-book-titles (title &optional series-title)
   "Parse TITLE and optionally SERIES-TITLE to get title and short title."
-  (let* ((short-title (and (string-match "\\( *[:：]+ *\\)" title)
-                           (ndlj-string-normalize-ja
-                            (substring title 0 (match-beginning 1)))))
+  (let* ((short-title (or (and (string-match "\\( *[:：]+ *\\| +\\)" title)
+                               (ndlj-str-norm (substring title 0 (match-beginning 1))))
+                          title))
          (series-title (when series-title
-                         (ndlj-string-normalize-ja series-title)))
-         (title (ndlj-string-normalize-ja (string-replace ":" " " title))))
+                         (ndlj-str-norm series-title)))
+         (title (concat (ndlj-str-norm (string-replace ":" " " title))
+                        (if series-title (concat " （" series-title "）") ""))))
     (append (when title `((title . ,title)))
-            (when (< (length short-title) (length title))
+            (when (and short-title (< (length short-title) (length title)))
               `((short-title . ,short-title))))))
 
-(cl-defun ndlj-api-book-creators (&key creators series-creators creator-entities)
-  "Parse CREATORS and SERIES-CREATORS using CREATOR-ENTITIES."
-  (let ((creator-entities
-         (mapcar
-          (lambda (it)
-            (cons (concat (map-elt it 'surname) (map-elt it 'given-name)) it))
-          creator-entities)))
+(cl-defun ndlj-api-creators (&key creators series-creators entities)
+  "Parse CREATORS and SERIES-CREATORS using ENTITIES."
+  (let ((creators (mapcan #'ndlj-api-parse-creator creators))
+        (series-creators (mapcan (lambda (it)
+                                   (mapcar (lambda (em)
+                                             (cons '(series . t) em))
+                                           (ndlj-api-parse-creator it)))
+                                 series-creators))
+        (entities (mapcar (lambda (it)
+                            (cons (concat (map-elt it 'surname)
+                                          (map-elt it 'given-name))
+                                  it))
+                          (mapcar #'ndlj-api-parse-entity-person-name entities))))
     (mapcar (lambda (it)
               (append
-               `((role . ,(let ((role (map-elt it 'role)))
-                            (if (map-elt it 'series)
-                                (concat "シリーズ" role)
-                              role))))
+               (when-let* ((v (map-elt it 'role))) `((role . ,v)))
+               (when-let* ((v (map-elt it 'series))) `((series . ,v)))
                (if-let* ((fullname (map-elt it 'fullname)))
-                   (let* ((em (or (map-elt creator-entities fullname) it)))
+                   (let* ((em (or (map-elt entities fullname) it)))
                      (if-let* ((surname (map-elt em 'surname))
                                (given-name (map-elt em 'given-name)))
                          `((surname . ,surname)
