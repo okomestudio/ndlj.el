@@ -114,10 +114,18 @@ REPO-ITEM-ID is of form `R<number>-I<number>'."
         `((title . ,.title)
           (short-title . ,.short-title)))
       `((volume . ,(ndlj-dom-by-path rec '(dcndl:volume rdf:value)))
-        (creators . ,(ndlj-api-creators
-                      :creators (ndlj-dom-by-path rec 'dc:creator :reducer nil)
-                      :series-creators (ndlj-dom-by-path rec 'dcndl:seriesCreator :reducer nil)
-                      :entities (ndlj-dom-by-path rec '(dcterms:creator foaf:name) :reducer nil))))
+        (creators
+         . ,(ndlj-api-creators
+             :creators
+             (seq-keep (lambda (it)
+                         ;; Only keep direct children of BibResource;
+                         ;; otherwise, creators may be fetched from part
+                         ;; information.
+                         (when (eq (car (dom-parent rec it)) 'dcndl:BibResource)
+                           (dom-inner-text it)))
+                       (dom-by-tag rec 'dc:creator))
+             :series-creators (ndlj-dom-by-path rec 'dcndl:seriesCreator :reducer nil)
+             :entities (ndlj-dom-by-path rec '(dcterms:creator foaf:name) :reducer nil))))
       (let-alist (ndlj-api-book-series
                   (ndlj-dom-by-path rec '(dcndl:seriesTitle rdf:value)))
         (append (when .series `((series . ,.series)))
