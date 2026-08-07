@@ -80,21 +80,26 @@
   (map-into (map-filter (lambda (_ v) v) plis) 'plist))
 
 (defun ndlj-zotero-creator-render (item-type rec)
-  (ndlj-zotero-keep-non-nil
-   `( :creatorType
-      ,(if-let* ((role (map-elt rec 'role)))
-           (if-let* ((role (if-let* ((_ (map-elt rec 'series)))
-                               (concat "シリーズ" role)
-                             role))
-                     (role (map-elt (map-elt ndlj-zotero-roles item-type) role)))
-               role
-             (ndlj-message "Unknown role: %s" role)
-             role)
-         (ndlj-message "Missing role for: %s" rec)
-         "author")
-      :name ,(map-elt rec 'fullname)
-      :lastName ,(map-elt rec 'surname)
-      :firstName ,(map-elt rec 'given-name) )))
+  (let ((creator-types (if-let* ((role (map-elt rec 'role)))
+                           (if-let* ((role (if-let* ((_ (map-elt rec 'series)))
+                                               (concat "シリーズ" role)
+                                             role))
+                                     (roles (map-elt (map-elt ndlj-zotero-roles item-type) role)))
+                               roles
+                             (ndlj-message "Unknown role: %s" role)
+                             `(,role))
+                         (ndlj-message "Missing role for: %s" rec)
+                         "author"))
+        (name (map-elt rec 'fullname))
+        (last-name (map-elt rec 'surname))
+        (first-name (map-elt rec 'given-name)))
+    (mapcar (lambda (creator-type)
+              (ndlj-zotero-keep-non-nil
+               `( :creatorType ,creator-type
+                  :name ,name
+                  :lastName ,last-name
+                  :firstName ,first-name )))
+            creator-types)))
 
 (defun ndlj-zotero-extra-render (alis)
   (string-join (map-apply (lambda (k v) (format "%s: %s" k v))
@@ -108,9 +113,12 @@
      `( :itemType ,item-type
         :title ,(map-elt rec 'title)
         :shortTitle ,(map-elt rec 'short-title)
-        :creators ,(cl-map 'vector
-                           (apply-partially #'ndlj-zotero-creator-render item-type)
-                           (map-elt rec 'creators))
+        ;; :creators ,(cl-map 'vector
+        ;;                    (apply-partially #'ndlj-zotero-creator-render item-type)
+        ;;                    (map-elt rec 'creators))
+        :creators ,(seq-mapcat (apply-partially #'ndlj-zotero-creator-render item-type)
+                               (map-elt rec 'creators)
+                               'vector)
         :publicationTitle ,(map-elt rec 'publication-title)
         :publisher ,(map-elt rec 'publisher)
         :place ,(map-elt rec 'place)
@@ -133,9 +141,9 @@
         :shortTitle ,(map-elt rec 'short-title)
         :volume ,(map-elt rec 'volume)
         ;; :creators ,(cl-map 'vector #'ndlj-zotero-creator-render (map-elt rec 'creators))
-        :creators ,(cl-map 'vector
-                           (apply-partially #'ndlj-zotero-creator-render item-type)
-                           (map-elt rec 'creators))
+        :creators ,(seq-mapcat (apply-partially #'ndlj-zotero-creator-render item-type)
+                               (map-elt rec 'creators)
+                               'vector)
         :series ,(map-elt rec 'series)
         :seriesNumber ,(map-elt rec 'series-number)
         :edition ,(map-elt rec 'edition)
