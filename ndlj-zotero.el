@@ -43,13 +43,15 @@
 (require 'zotero)
 
 (defconst ndlj-zotero-roles
-  '(("book" . (("著" . "author")
-               ("編" . "editor")
-               ("訳" . "translator")
-               ("監修" . "contributor")
-               ("漫画" . "author")
-               ("写真" . "author")
-               ("シリーズ編" . "seriesEditor")))))
+  '(("book" . (("著" . ("author"))
+               ("編" . ("editor"))
+               ("訳" . ("translator"))
+               ("述" . ("author"))
+               ("編著" . ("author" "editor"))
+               ("監修" . ("contributor"))
+               ("漫画" . ("author"))
+               ("写真" . ("author"))
+               ("シリーズ編" . ("seriesEditor"))))))
 
 (defun ndlj-zotero-date-render (date)
   "Render DATE for JSON."
