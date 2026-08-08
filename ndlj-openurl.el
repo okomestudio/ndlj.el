@@ -304,13 +304,6 @@
               (string= (or (map-elt it 'role "出版") "出版") "出版"))
             entries))
 
-(defun ndlj-openurl-url-parse (url)
-  (when-let* ((urlobj (ndlj-url-parse url))
-              (path (ndlj-url-path urlobj))
-              (_ (string-match "\\(?1:R[0-9]+\\)-I\\(?2:[0-9]+\\)" path)))
-    `((repo-id . ,(match-string 1 path))
-      (bib-id . ,(match-string 2 path)))))
-
 (defun ndlj-openurl-magazine-article-item-get (search-result-item)
   (let* ((item-url (map-elt search-result-item 'item-url))
          (results (ndlj-url-retrieve-gather
@@ -341,7 +334,7 @@
         (language . ,(map-elt rec "本文の言語コード"))
         (call-number . ,(map-elt rec "請求記号"))
         (extra . (("NDLBibID" . ,(map-elt (map-elt rec "書誌ID（NDLBibID）") "NDLBibID"))
-                  ("NDLRepoID" . ,(map-elt (ndlj-openurl-url-parse item-url) 'repo-id)))))
+                  ("NDLRepoID" . ,(map-elt (ndlj-api-url-parse item-url) 'repo-id)))))
       ))))
 
 (defun ndlj-openurl-book-item-get (search-result-item)

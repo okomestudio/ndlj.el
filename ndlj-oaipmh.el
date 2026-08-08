@@ -41,6 +41,40 @@ REPO-ITEM-ID is of form `R<number>-I<number>'."
                                 (metadataPrefix . ("dcndl_v3"))
                                 (identifier . (,identifier))))))
 
+(defun ndlj-oaipmh-ndl-repo-id (dom)
+  "Extract a repository ID (レポジトリ番号) from DOM."
+  (ndlj-dom-by-path dom 'dcndl:bibRecordCategory))
+
+(defun ndlj-oaipmh-ndl-bib-id (dom)
+  "Extract an NDLBibID from DOM."
+  (ndlj-dom-by-tag-by-attr dom 'dcterms:identifier 'rdf:datatype
+                           "http://ndl.go.jp/dcndl/terms/NDLBibID"))
+
+(defun ndlj-oaipmh-ndlsh (dom)
+  "Extract NDL subject headings (件名標目) from DOM."
+  (let ((pattern "\\`http://id.ndl.go.jp/auth/ndlsh/\\(?1:.*\\)\\'"))
+    (mapcar
+     (lambda (node)
+       (let* ((val (dom-attr node 'rdf:about))
+              (id (and (string-match pattern val)
+                       (match-string 1 val)))
+              (subject (dom-inner-text (dom-by-tag node 'rdf:value))))
+         `((id . ,id)
+           (subject . ,subject))))
+     (ndlj-dom-by-tag-by-attr dom '(dcterms:subject rdf:Description)
+                              'rdf:about pattern
+                              :fun nil :reducer nil))))
+
+(defun ndlj-oaipmh-ndc (dom version)
+  "Extract the VERSION of NDC from DOM."
+  (when-let*
+      ((resource (format "\\`http://id.ndl.go.jp/class/ndc%d/\\(.*\\)" version))
+       (s (ndlj-dom-by-tag-by-attr dom 'dcterms:subject 'rdf:resource resource
+                                   :fun (lambda (n)
+                                          (dom-attr n 'rdf:resource))))
+       (_ (string-match resource s)))
+    (match-string 1 s)))
+
 (defun ndlj-oaipmh-magazine-article-item-get (search-result-item)
   (let* ((item-url (map-elt search-result-item 'item-url))
          (repo-item-url (ndlj-oaipmh-url-get-record
@@ -48,8 +82,7 @@ REPO-ITEM-ID is of form `R<number>-I<number>'."
          (results (ndlj-url-retrieve-gather
                    `((,repo-item-url . ndlj-url-retrieve-as-xml))))
          (rec (dom-by-tag (plist-get (nth 0 results) :value) 'record)))
-    (seq-filter
-     #'cdr
+    (ndlj-alist-keep-non-nil
      (append
       `((ndl:item-url . ,item-url)
         (material-type . ,(ndlj-dom-by-path-attr rec 'dcndl:materialType 'rdfs:label)))
@@ -72,22 +105,18 @@ REPO-ITEM-ID is of form `R<number>-I<number>'."
         (pages . ,(ndlj-dom-by-path rec '(dcndl:publicationName dcndl:pageRange)))
         (language . ,(ndlj-dom-by-path rec 'dcterms:language))
         (call-number . ,(ndlj-dom-by-path rec 'dcndl:callNumber))
-        (extra
-         . (("NDLBibID" . ,(ndlj-dom-by-tag-by-attr rec 'dcterms:identifier 'rdf:datatype
-                                                    "http://ndl.go.jp/dcndl/terms/NDLBibID"))
-            ("NDLRepoID" . ,(ndlj-dom-by-path rec 'dcndl:bibRecordCategory)))))
+        (extra . (("NDLBibID" . ,(ndlj-oaipmh-ndl-bib-id rec))
+                  ("NDLRepoID" . ,(ndlj-oaipmh-ndl-repo-id rec)))))
       ))))
 
-(defun ndlj-oaipmh-book-extra (dom)
-  (append
-   (when-let* ((resource "\\`http://id.ndl.go.jp/class/ndc10/\\(.*\\)")
-               (n (ndlj-dom-by-tag-by-attr dom 'dcterms:subject 'rdf:resource resource))
-               (s (dom-attr n 'rdf:resource))
-               (_ (string-match resource s)))
-     `(("NDLC10" . ,(match-string 1 s))))
-   (when-let* ((resource "http://ndl.go.jp/dcndl/terms/NDLBibID")
-               (n (ndlj-dom-by-tag-by-attr dom 'dcterms:identifier 'rdf:datatype resource)))
-     `(("NDLBibID" . ,(dom-inner-text n))))))
+(defun ndlj-oaipmh-book-parts (dom)
+  "Extract book parts information from DOM."
+  (mapcar (lambda (node)
+            `((title . ,(ndlj-dom-by-path node 'dcterms:title))
+              (creators . ,(ndlj-api-creators
+                            :creators (ndlj-dom-by-path node 'dc:creator
+                                                        :reducer nil)))))
+          (ndlj-dom-by-path dom 'dcndl:partInformation :fun nil :reducer nil)))
 
 (defun ndlj-oaipmh-book-item-get (search-result-item)
   (let* ((item-url (map-elt search-result-item 'item-url))
@@ -100,13 +129,14 @@ REPO-ITEM-ID is of form `R<number>-I<number>'."
                           (require 'ndlj-openurl nil t)
                           (let* ((dom (ndlj-url-retrieve-as-html start end))
                                  (rec (ndlj-openurl-extract-fields dom)))
-                            `( :extra ,(ndlj-openurl-book-extra rec)
-                               :tags ,(ndlj-openurl-book-tags rec) )))))))
+                            `( :ndc8 ,(map-elt rec "NDC8版")
+                               :ndc9 ,(map-elt rec "NDC9版")
+                               :ndc10 ,(map-elt rec "NDC10版") )))))))
          (rec (dom-by-tag (plist-get (nth 0 results) :value) 'record))
-         (extra (plist-get (plist-get (nth 1 results) :value) :extra))
-         (tags (plist-get (plist-get (nth 1 results) :value) :tags)))
-    (seq-filter
-     #'cdr
+         (ndc8 (plist-get (plist-get (nth 1 results) :value) :ndc))
+         (ndc9 (plist-get (plist-get (nth 1 results) :value) :ndc9))
+         (ndc10 (plist-get (plist-get (nth 1 results) :value) :ndc10)))
+    (ndlj-alist-keep-non-nil
      (append
       `((ndl:item-url . ,item-url)
         (material-type . ,(ndlj-dom-by-path-attr rec 'dcndl:materialType 'rdfs:label)))
@@ -142,13 +172,13 @@ REPO-ITEM-ID is of form `R<number>-I<number>'."
                                           "\\`http://ndl.go.jp/dcndl/terms/ISBN\\'"))
         (language . ,(ndlj-dom-by-path rec 'dcterms:language))
         (call-number . ,(ndlj-dom-by-path rec 'dcndl:callNumber))
-        (extra . ,(or extra (ndlj-oaipmh-book-extra rec)))
-        (tags
-         . ,(seq-uniq
-             (append tags
-                     (mapcan #'ndlj-api-tags-from-topic
-                             (ndlj-dom-by-path rec '(dcterms:subject rdf:value) :reducer nil))))))
-      ))))
+        (parts . ,(ndlj-oaipmh-book-parts rec))
+        (ndlsh . ,(ndlj-oaipmh-ndlsh rec))
+        (ndc8 . ,(or ndc8 (ndlj-oaipmh-ndc rec 8)))
+        (ndc9 . ,(or ndc9 (ndlj-oaipmh-ndc rec 9)))
+        (ndc10 . ,(or ndc10 (ndlj-oaipmh-ndc rec 10)))
+        (ndl-bib-id . ,(ndlj-oaipmh-ndl-bib-id rec))
+        (ndl-repo-id . ,(ndlj-oaipmh-ndl-repo-id rec)))))))
 
 ;;;###autoload
 (defun ndlj-oaipmh-bib-item-get (search-result-item)

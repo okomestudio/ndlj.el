@@ -155,11 +155,62 @@
         :language ,(ndlj-zotero-language-render (map-elt rec 'language))
         :libraryCatalog "NDL Search"
         :callNumber ,(map-elt rec 'call-number)
-        :extra ,(ndlj-zotero-extra-render (map-elt rec 'extra))
-        :tags ,(cl-map 'vector
-                       (lambda (tag)
-                         `( :tag ,tag ))
-                       (flatten-list (seq-uniq (map-elt rec 'tags))))))))
+        :extra ,(ndlj-zotero-extra-render
+                 (map-merge
+                  'alist
+                  (seq-map-indexed
+                   (lambda (it idx)
+                     `(,(format "NDLSH_%d" idx)
+                       . ,(format "%s %s"
+                                  (map-elt it 'id)
+                                  (map-elt it 'subject))))
+                   (map-elt rec 'ndlsh))
+                  `(("NDC8" . ,(map-elt rec 'ndc8))
+                    ("NDC9" . ,(map-elt rec 'ndc9))
+                    ("NDC10" . ,(map-elt rec 'ndc10))
+                    ("NDLBibID" . ,(map-elt rec 'ndl-bib-id))
+                    ("NDLRepoID" . ,(map-elt rec 'ndl-repo-id)))))
+        :abstractNote
+        ,(string-join
+          (append
+           (when-let* ((parts (map-elt rec 'parts)))
+             (append
+              '("【内容細目】")
+              (mapcar
+               (lambda (part)
+                 (let ((title (map-elt part 'title))
+                       (creators (map-elt part 'creators)))
+                   (format "%s ／ %s"
+                           title
+                           (mapconcat
+                            (lambda (it)
+                              (let ((fullname (map-elt it 'fullname))
+                                    (role (map-elt it 'role)))
+                                (format "%s（%s）" fullname role)))
+                            creators))))
+               parts))))
+          "\n")
+        :tags
+        ,(cl-map 'vector
+                 (lambda (tag) `( :tag ,tag ))
+                 (seq-uniq
+                  (flatten-list
+                   (append
+                    (mapcar
+                     (lambda (str)
+                       (when (stringp str)
+                         (cdr (string-split str "\\([.]? \\|--\\)" t "\\s-+"))))
+                     `(,(map-elt rec 'ndc9) ,(map-elt rec 'ndc10)))
+                    (mapcar
+                     (lambda (it)
+                       (cond ((map-elt it 'fullname)
+                              (map-elt it 'fullname))
+                             ((and (map-elt it 'surname) (map-elt it 'given-name))
+                              (concat (map-elt it 'surname) " " (map-elt it 'given-name)))
+                             (t
+                              (ndlj-api-tags-from-topic (map-elt it 'subject)))))
+                     (map-elt rec 'ndlsh))))))
+        ))))
 
 ;;; Interactive Commands
 

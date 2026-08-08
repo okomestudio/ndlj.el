@@ -28,6 +28,7 @@
 (require 'cl-lib)
 (require 'dom)
 (require 'japan-util)
+(require 'seq)
 (require 'url)
 (require 'url-expand)
 (require 'url-util)
@@ -209,15 +210,15 @@ REDUCER is applied to the list of nodes found."
     (if reducer (funcall reducer results) results)))
 
 (cl-defun ndlj-dom-by-tag-by-attr
-    (dom tag attribute value &key (fun #'dom-inner-text) (reducer #'car))
-  "Extract DOM nodes by TAG with ATTRIBUTE matching VALUE.
+    (dom tags attribute value &key (fun #'dom-inner-text) (reducer #'car))
+  "Extract DOM nodes by nested TAGS with ATTRIBUTE matching VALUE.
 FUN is applied to each node found. REDUCER is applied to the list of
 nodes found."
   (let ((results (seq-keep (lambda (node)
                              (when-let* ((s (or (dom-attr node attribute) ""))
                                          (_ (string-match value s)))
                                node))
-                           (dom-by-tag dom tag))))
+                           (ndlj-dom-by-path dom tags :fun nil :reducer nil))))
     (setq results (if fun (mapcar fun results) results))
     (if reducer (funcall reducer results) results)))
 
@@ -240,6 +241,12 @@ nodes found."
                                   (" +" . " ")))
     (setq str (replace-regexp-in-string from to str)))
   str)
+
+;;; List Operations
+
+(defun ndlj-alist-keep-non-nil (al)
+  "Remove nil-value entries from an alist AL."
+  (seq-filter #'cdr al))
 
 ;;; System
 

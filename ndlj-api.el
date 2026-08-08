@@ -179,5 +179,12 @@
           (series-number . ,(cdr parts)) )
       `((series . ,str)))))
 
+(defun ndlj-api-url-parse (url)
+  (when-let* ((urlobj (ndlj-url-parse url))
+              (path (ndlj-url-path urlobj))
+              (_ (string-match "\\(?1:R[0-9]+\\)-I\\(?2:[0-9]+\\)" path)))
+    `((repo-id . ,(match-string 1 path))
+      (bib-id . ,(match-string 2 path)))))
+
 (provide 'ndlj-api)
 ;;; ndlj-api.el ends here
