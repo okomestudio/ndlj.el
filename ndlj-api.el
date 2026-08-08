@@ -135,8 +135,8 @@
                           title))
          (series-title (when series-title
                          (ndlj-str-norm series-title)))
-         (title (concat (ndlj-str-norm (string-replace ":" " " title))
-                        (if series-title (concat " （" series-title "）") ""))))
+         (title (concat (replace-regexp-in-string " *: *" "：" (ndlj-str-norm title))
+                        (if series-title (concat "（" series-title "）") ""))))
     (append (when title `((title . ,title)))
             (when (and short-title (< (length short-title) (length title)))
               `((short-title . ,short-title))))))
