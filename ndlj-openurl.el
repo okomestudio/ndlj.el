@@ -239,17 +239,17 @@
   "Process NODE ('dd') as an NDC info."
   (when-let* ((span (dom-by-tag node 'span))
               (str (dom-inner-text span)))
+    (ndlj-debug-message "Parse NDC string: '%s'" str)
     (if (string-match "\\`\\([0-9/.]+\\)\\( *: *\\(.+\\)\\)?\\'" str)
         (let ((code (match-string 1 str))
               (text (match-string 3 str)))
           (progn
-            (concat code
+            (concat "[" code "]"
                     (if text
                         (let* ((text (replace-regexp-in-string "[．] *" ". " text))
                                (text (replace-regexp-in-string " *-- *" " -- " text)))
                           (concat " " text))
-                      ""))
-            ))
+                      ""))))
       (when ndlj-debug (ndlj-message "Unparsable NDC: '%s'" str))
       str)))
 

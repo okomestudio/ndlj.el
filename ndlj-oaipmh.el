@@ -55,15 +55,23 @@ REPO-ITEM-ID is of form `R<number>-I<number>'."
   (let ((pattern "\\`http://id.ndl.go.jp/auth/ndlsh/\\(?1:.*\\)\\'"))
     (mapcar
      (lambda (node)
-       (let* ((val (dom-attr node 'rdf:about))
-              (id (and (string-match pattern val)
-                       (match-string 1 val)))
-              (subject (dom-inner-text (dom-by-tag node 'rdf:value))))
-         `((id . ,id)
-           (subject . ,subject))))
-     (ndlj-dom-by-tag-by-attr dom '(dcterms:subject rdf:Description)
-                              'rdf:about pattern
-                              :fun nil :reducer nil))))
+       (ndlj-alist-keep-non-nil
+        `((id . ,(when-let* ((val (dom-attr node 'rdf:about))
+                             (_ (string-match pattern val)))
+                   (match-string 1 val)))
+          (subject . ,(dom-inner-text (dom-by-tag node 'rdf:value))))))
+     (ndlj-dom-by-path dom '(dcterms:subject rdf:Description)
+                       :fun nil :reducer nil))))
+
+(defun ndlj-oaipmh-ndlc (dom)
+  "Extract the NDLC from DOM."
+  (when-let*
+      ((resource "\\`http://id.ndl.go.jp/class/ndlc/\\(.*\\)\\'")
+       (s (ndlj-dom-by-tag-by-attr dom 'dcterms:subject 'rdf:resource resource
+                                   :fun (lambda (n)
+                                          (dom-attr n 'rdf:resource))))
+       (_ (string-match resource s)))
+    (match-string 1 s)))
 
 (defun ndlj-oaipmh-ndc (dom version)
   "Extract the VERSION of NDC from DOM."
@@ -129,13 +137,16 @@ REPO-ITEM-ID is of form `R<number>-I<number>'."
                           (require 'ndlj-openurl nil t)
                           (let* ((dom (ndlj-url-retrieve-as-html start end))
                                  (rec (ndlj-openurl-extract-fields dom)))
-                            `( :ndc8 ,(map-elt rec "NDC8版")
+                            `( :dom ,dom
+                               :ndc8 ,(map-elt rec "NDC8版")
                                :ndc9 ,(map-elt rec "NDC9版")
                                :ndc10 ,(map-elt rec "NDC10版") )))))))
          (rec (dom-by-tag (plist-get (nth 0 results) :value) 'record))
-         (ndc8 (plist-get (plist-get (nth 1 results) :value) :ndc))
-         (ndc9 (plist-get (plist-get (nth 1 results) :value) :ndc9))
-         (ndc10 (plist-get (plist-get (nth 1 results) :value) :ndc10)))
+         (openurl (plist-get (nth 1 results) :value))
+         (openurl-dom (plist-get openurl :dom))
+         (ndc8 (plist-get openurl :ndc))
+         (ndc9 (plist-get openurl :ndc9))
+         (ndc10 (plist-get openurl :ndc10)))
     (ndlj-alist-keep-non-nil
      (append
       `((ndl:item-url . ,item-url)
@@ -174,11 +185,17 @@ REPO-ITEM-ID is of form `R<number>-I<number>'."
         (call-number . ,(ndlj-dom-by-path rec 'dcndl:callNumber))
         (parts . ,(ndlj-oaipmh-book-parts rec))
         (ndlsh . ,(ndlj-oaipmh-ndlsh rec))
+        (ndlc . ,(ndlj-oaipmh-ndlc rec))
         (ndc8 . ,(or ndc8 (ndlj-oaipmh-ndc rec 8)))
         (ndc9 . ,(or ndc9 (ndlj-oaipmh-ndc rec 9)))
         (ndc10 . ,(or ndc10 (ndlj-oaipmh-ndc rec 10)))
         (ndl-bib-id . ,(ndlj-oaipmh-ndl-bib-id rec))
-        (ndl-repo-id . ,(ndlj-oaipmh-ndl-repo-id rec)))))))
+        (ndl-repo-id . ,(ndlj-oaipmh-ndl-repo-id rec))
+        (index . ,(dom-inner-text
+                   (dom-by-class (dom-by-id openurl-dom "pages-books-section-index")
+                                 "pages-books-section-index-item-label")))
+        (summary . ,(dom-inner-text
+                     (dom-by-class openurl-dom "pages-books-abstract-notes-info"))))))))
 
 ;;;###autoload
 (defun ndlj-oaipmh-bib-item-get (search-result-item)

@@ -160,12 +160,14 @@
                   'alist
                   (seq-map-indexed
                    (lambda (it idx)
-                     `(,(format "NDLSH_%d" idx)
-                       . ,(format "%s %s"
-                                  (map-elt it 'id)
-                                  (map-elt it 'subject))))
+                     (let ((key (format "NDLSH_%d" idx))
+                           (id (map-elt it 'id))
+                           (subject (map-elt it 'subject)))
+                       `(,key . ,(concat (if id (format "[%s] " id) "")
+                                         subject))))
                    (map-elt rec 'ndlsh))
-                  `(("NDC8" . ,(map-elt rec 'ndc8))
+                  `(("NDLC" . ,(map-elt rec 'ndlc))
+                    ("NDC8" . ,(map-elt rec 'ndc8))
                     ("NDC9" . ,(map-elt rec 'ndc9))
                     ("NDC10" . ,(map-elt rec 'ndc10))
                     ("NDLBibID" . ,(map-elt rec 'ndl-bib-id))
@@ -188,7 +190,9 @@
                                     (role (map-elt it 'role)))
                                 (format "%s（%s）" fullname role)))
                             creators))))
-               parts))))
+               parts)))
+           (when-let* ((index (map-elt rec 'index)))
+             `("【目次】" ,index)))
           "\n")
         :tags
         ,(cl-map 'vector
