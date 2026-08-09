@@ -49,6 +49,7 @@
                ("述" . ("author"))
                ("編著" . ("author" "editor"))
                ("監修" . ("contributor"))
+               ("共著" . ("author"))
                ("漫画" . ("author"))
                ("写真" . ("author"))
                ("シリーズ編" . ("seriesEditor"))))))
@@ -140,7 +141,6 @@
         :title ,(map-elt rec 'title)
         :shortTitle ,(map-elt rec 'short-title)
         :volume ,(map-elt rec 'volume)
-        ;; :creators ,(cl-map 'vector #'ndlj-zotero-creator-render (map-elt rec 'creators))
         :creators ,(seq-mapcat (apply-partially #'ndlj-zotero-creator-render item-type)
                                (map-elt rec 'creators)
                                'vector)
@@ -174,26 +174,26 @@
                     ("NDLRepoID" . ,(map-elt rec 'ndl-repo-id)))))
         :abstractNote
         ,(string-join
-          (append
-           (when-let* ((parts (map-elt rec 'parts)))
-             (append
-              '("【内容細目】")
-              (mapcar
-               (lambda (part)
-                 (let ((title (map-elt part 'title))
-                       (creators (map-elt part 'creators)))
-                   (format "%s ／ %s"
-                           title
+          (delq nil
+                (list
+                 (when-let ((summary (map-elt rec 'summary)))
+                   (concat "【要約】\n"
+                           (string-join (mapcar #'ndlj-str-norm summary) "\n────\n")))
+                 (when-let ((index (map-elt rec 'index)))
+                   (concat "【目次】\n" (ndlj-str-norm index)))
+                 (when-let ((parts (map-elt rec 'parts)))
+                   (concat "【内容細目】\n"
                            (mapconcat
-                            (lambda (it)
-                              (let ((fullname (map-elt it 'fullname))
-                                    (role (map-elt it 'role)))
-                                (format "%s（%s）" fullname role)))
-                            creators))))
-               parts)))
-           (when-let* ((index (map-elt rec 'index)))
-             `("【目次】" ,index)))
-          "\n")
+                            (pcase-lambda ((map title creators))
+                              (format "%s ／ %s" (ndlj-str-norm title)
+                                      (mapconcat
+                                       (pcase-lambda ((map fullname role))
+                                         (format "%s（%s）" fullname role))
+                                       creators "")))
+                            parts "\n")))
+                 (when-let ((note-general (map-elt rec 'note-general)))
+                   (concat "【一般注記】\n" (ndlj-str-norm note-general)))))
+          "\n\n")
         :tags
         ,(cl-map 'vector
                  (lambda (tag) `( :tag ,tag ))

@@ -30,6 +30,7 @@
 
 (require 'ndlj-api)
 (require 'ndlj-util)
+(require 'ndlj-openurl)
 
 (defun ndlj-oaipmh-url-get-record (repo-item-id)
   "Generate the entity URL for REPO-ITEM-ID.
@@ -132,21 +133,9 @@ REPO-ITEM-ID is of form `R<number>-I<number>'."
                          (map-elt search-result-item 'repo-item-id)))
          (results (ndlj-url-retrieve-gather
                    `((,repo-item-url . ndlj-url-retrieve-as-xml)
-                     (,item-url
-                      . (lambda (start end)
-                          (require 'ndlj-openurl nil t)
-                          (let* ((dom (ndlj-url-retrieve-as-html start end))
-                                 (rec (ndlj-openurl-extract-fields dom)))
-                            `( :dom ,dom
-                               :ndc8 ,(map-elt rec "NDC8版")
-                               :ndc9 ,(map-elt rec "NDC9版")
-                               :ndc10 ,(map-elt rec "NDC10版") )))))))
+                     (,item-url . ndlj-openurl-book-extract-plus))))
          (rec (dom-by-tag (plist-get (nth 0 results) :value) 'record))
-         (openurl (plist-get (nth 1 results) :value))
-         (openurl-dom (plist-get openurl :dom))
-         (ndc8 (plist-get openurl :ndc))
-         (ndc9 (plist-get openurl :ndc9))
-         (ndc10 (plist-get openurl :ndc10)))
+         (openurl (plist-get (nth 1 results) :value)))
     (ndlj-alist-keep-non-nil
      (append
       `((ndl:item-url . ,item-url)
@@ -186,16 +175,14 @@ REPO-ITEM-ID is of form `R<number>-I<number>'."
         (parts . ,(ndlj-oaipmh-book-parts rec))
         (ndlsh . ,(ndlj-oaipmh-ndlsh rec))
         (ndlc . ,(ndlj-oaipmh-ndlc rec))
-        (ndc8 . ,(or ndc8 (ndlj-oaipmh-ndc rec 8)))
-        (ndc9 . ,(or ndc9 (ndlj-oaipmh-ndc rec 9)))
-        (ndc10 . ,(or ndc10 (ndlj-oaipmh-ndc rec 10)))
+        (ndc8 . ,(or (map-elt openurl 'ndc8) (ndlj-oaipmh-ndc rec 8)))
+        (ndc9 . ,(or (map-elt openurl 'ndc9) (ndlj-oaipmh-ndc rec 9)))
+        (ndc10 . ,(or (map-elt openurl 'ndc10) (ndlj-oaipmh-ndc rec 10)))
         (ndl-bib-id . ,(ndlj-oaipmh-ndl-bib-id rec))
         (ndl-repo-id . ,(ndlj-oaipmh-ndl-repo-id rec))
-        (index . ,(dom-inner-text
-                   (dom-by-class (dom-by-id openurl-dom "pages-books-section-index")
-                                 "pages-books-section-index-item-label")))
-        (summary . ,(dom-inner-text
-                     (dom-by-class openurl-dom "pages-books-abstract-notes-info"))))))))
+        (note-general . ,(map-elt openurl 'note-general))
+        (index . ,(map-elt openurl 'index))
+        (summary . ,(map-elt openurl 'summary)))))))
 
 ;;;###autoload
 (defun ndlj-oaipmh-bib-item-get (search-result-item)

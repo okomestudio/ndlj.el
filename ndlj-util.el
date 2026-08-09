@@ -188,6 +188,28 @@ betwee 0 and JITTER."
 
 ;;; DOM
 
+(cl-defun ndlj-dom-by-class
+    (dom class-name &key regexp (fun #'dom-inner-text) (reducer #'car))
+  "Return elements in DOM whose class matches CLASS-NAME.
+DOM is a DOM tree node as returned by `libxml-parse-html-region`.
+
+CLASS-NAME is matched as an exact, literal CSS class name by default,
+ensuring space-delimited classes (e.g., matching \"foo\" in \"foo bar\")
+are matched without matching substring prefixes (e.g., \"foobar\").
+
+If REGEXP is non-nil, CLASS-NAME is treated as a raw regular expression.
+
+FUN is applied to each node found. REDUCER is applied to the list of
+nodes found."
+  (let* ((pattern (if regexp
+                      class-name
+                    (concat "\\(?:^\\|[[:space:]]+\\)"
+                            (regexp-quote class-name)
+                            "\\(?:[[:space:]]+\\|$\\)")))
+         (results (dom-by-class dom pattern)))
+    (setq results (if fun (mapcar fun results) results))
+    (if reducer (funcall reducer results) results)))
+
 (cl-defun ndlj-dom-by-path
     (dom tags &key (fun #'dom-inner-text) (reducer #'car))
   "Extract nested nodes from DOM matching a sequence of TAGS.
@@ -226,21 +248,24 @@ nodes found."
 
 (defun ndlj-str-norm (str)
   "Normalize STR."
-  (japanese-hankaku str 'ascii-only))
-
-(defun ndlj-string-normalize-ja (str)
-  "Normalize STR with standard Japanese characters (typically zenkaku)."
-  (pcase-dolist (`(,from . ,to) '(("　" . " ")
-                                  ("!" . "！")
-                                  ("?" . "？")
-                                  ("(" . "（")
-                                  (")" . "）")
-                                  ("\\[" . "［")
-                                  ("\\]" . "］")
-                                  (":" . "：")
-                                  (" +" . " ")))
-    (setq str (replace-regexp-in-string from to str)))
-  str)
+  (with-temp-buffer
+    (insert (japanese-hankaku str t))
+    (pcase-dolist (`(,from . ,to)
+                   '(("!" . "！")
+                     ("?" . "？")
+                     ("(" . "（")
+                     (")" . "）")
+                     ("<" . "〈")
+                     (">" . "〉")
+                     ("\\[" . "［")
+                     ("\\]" . "］")
+                     (":" . "：")
+                     ("/" . "／")
+                     ("--" . "――")))
+      (goto-char (point-min))
+      (while (re-search-forward from nil t)
+        (replace-match to t t)))
+    (buffer-string)))
 
 ;;; List Operations
 

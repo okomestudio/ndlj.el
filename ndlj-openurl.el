@@ -48,19 +48,19 @@
   :group 'ndlj)
 
 (defconst ndlj-openurl--field-extractors
-  '(("出版事項" . ndlj-openurl--extract-publisher)
+  '(("著者・編者" . ndlj-openurl--extract-creators)
+    ("シリーズ著者・編者" . ndlj-openurl--extract-creators)
+    ("著者標目" . ndlj-openurl--extract-creator-indices)
+    ("出版事項" . ndlj-openurl--extract-publisher)
     ("出版事項（掲載誌）" . ndlj-openurl--extract-publisher)
     ("出版年月日等" . ndlj-openurl--extract-publication-date)
     ("出版年（W3CDTF）" . ndlj-openurl--extract-publication-year)
     ("数量" . ndlj-openurl--extract-quantity)
-    ("著者・編者" . ndlj-openurl--extract-creators)
-    ("シリーズ著者・編者" . ndlj-openurl--extract-creators)
-    ("著者標目" . ndlj-openurl--extract-creator-indices)
     ("件名標目" . ndlj-openurl--extract-topic-term-indices)
-    ("書誌ID（NDLBibID）" . ndlj-openurl--extract-ndl-bib-id)
     ("NDC8版" . ndlj-openurl--extract-ndc)
     ("NDC9版" . ndlj-openurl--extract-ndc)
-    ("NDC10版" . ndlj-openurl--extract-ndc)))
+    ("NDC10版" . ndlj-openurl--extract-ndc)
+    ("書誌ID（NDLBibID）" . ndlj-openurl--extract-ndl-bib-id)))
 
 (defconst ndlj-openurl-hostname "ndlsearch.ndl.go.jp")
 (defconst ndlj-openurl-api-path "/api/openurl")
@@ -253,23 +253,51 @@
       (when ndlj-debug (ndlj-message "Unparsable NDC: '%s'" str))
       str)))
 
+(defun ndlj-openurl-extract-from-dl (tags)
+  (mapcar
+   (lambda (tag)
+     (when-let*
+         ((field (string-trim (ndlj-dom-by-path tag 'dt)
+                              nil "[ \\t\\n\\r:：]+"))
+          (dd (dom-by-tag tag 'dd))
+          (value
+           (if-let* ((exf (map-elt ndlj-openurl--field-extractors field)))
+               (funcall exf (car dd))
+             (string-join
+              (seq-keep (lambda (n)
+                          (when-let*
+                              ((s (and (not (eq (dom-tag n) 'comment))
+                                       (string-trim (dom-inner-text n)))))
+                            (unless (string-empty-p s)
+                              (ndlj-str-norm s))))
+                        (dom-children dd))
+              " "))))
+       `(,field . ,value)))
+   tags))
+
+(defun ndlj-openurl-extract-from-abstract-area (dom)
+  (let ((node (ndlj-dom-by-class dom "pages-books-abstract-area" :fun nil)))
+    (append
+     (mapcar
+      (lambda (div)
+        `(,(string-trim (ndlj-dom-by-class div "base-heading"))
+          . ,(ndlj-openurl-extract-from-dl (dom-by-tag div 'dl))))
+      (ndlj-dom-by-class node "pages-books-abstract-notes" :fun nil :reducer nil))
+     (mapcar
+      (lambda (div)
+        `(,(string-trim (ndlj-dom-by-class div "base-heading"))
+          . ,(ndlj-openurl-extract-from-dl (dom-by-tag div 'dl))))
+      (ndlj-dom-by-class node "pages-books-abstract" :fun nil :reducer nil))
+     )))
+
 (defun ndlj-openurl-extract-fields (dom)
   (mapcar
-   (lambda (node)
-     (when-let*
-         ((field (dom-inner-text (dom-by-tag node 'dt)))
-          (value (if-let* ((exf (map-elt ndlj-openurl--field-extractors field)))
-                     (funcall exf (car (dom-by-tag node 'dd)))
-                   (string-trim
-                    (string-join (seq-keep
-                                  (lambda (node)
-                                    (unless (eq (car node) 'comment)
-                                      (ndlj-str-norm (dom-inner-text node))))
-                                  (dom-children (dom-by-tag node 'dd)))
-                                 " ")))))
-       `(,field . ,value)))
-   (dom-by-class (dom-by-class dom "pages-books-section-bib-list")
-                 "pages-books-ndls-section-bib-list-item")))
+   (lambda (section)
+     `(,(string-trim (ndlj-dom-by-class section "base-heading"))
+       . ,(ndlj-openurl-extract-from-dl
+           (ndlj-dom-by-class section "pages-books-ndls-section-bib-list-item"
+                              :fun nil :reducer nil))))
+   (ndlj-dom-by-class dom "pages-books-section-bib-list" :fun nil :reducer nil)))
 
 (defun ndlj-openurl-book-extra (rec)
   "Get extra from REC for the book item."
@@ -336,6 +364,36 @@
         (extra . (("NDLBibID" . ,(map-elt (map-elt rec "書誌ID（NDLBibID）") "NDLBibID"))
                   ("NDLRepoID" . ,(map-elt (ndlj-api-url-parse item-url) 'repo-id)))))
       ))))
+
+(defun ndlj-openurl-book-extract-plus (start end)
+  (let* ((dom (ndlj-url-retrieve-as-html start end))
+         (abst (ndlj-openurl-extract-from-abstract-area dom))
+         (recs (ndlj-openurl-extract-fields dom))
+         (rec (map-elt recs "紙")))
+    (ndlj-alist-keep-non-nil
+     `((dom . ,dom)
+       (ndc8 . ,(map-elt rec "NDC8版"))
+       (ndc9 . ,(map-elt rec "NDC9版"))
+       (ndc10 . ,(map-elt rec "NDC10版"))
+       (note-general . ,(map-elt rec "一般注記"))
+       (index
+        . ,(when-let ((node (dom-by-id dom "pages-books-section-index")))
+             (string-join
+              (append
+               (ndlj-dom-by-class node "pages-books-section-index-item-label"
+                                  :reducer nil)
+               (when-let ((button (ndlj-dom-by-tag-by-attr
+                                   node 'button 'aria-expanded "false" :fun nil)))
+                 (list (ndlj-dom-by-path button 'span))))
+              "\n")))
+       (summary
+        . ,(let ((sum-paper (map-elt (map-elt abst "資料詳細") "要約等"))
+                 (sum-digital (map-elt (map-elt recs "デジタル") "要約等")))
+             (seq-keep #'identity
+                       `(,sum-paper
+                         ,(unless (and sum-paper sum-digital
+                                       (string-prefix-p sum-digital sum-paper))
+                            sum-digital)))))))))
 
 (defun ndlj-openurl-book-item-get (search-result-item)
   "Get an item as alist from SEARCH-RESULT-ITEM."

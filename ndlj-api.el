@@ -33,7 +33,7 @@
 (require 'ndlj-util)
 
 (defconst ndlj-api-regexp-roles
-  (regexp-opt '("著" "編" "訳" "述" "編著" "監修" "漫画" "写真")))
+  (regexp-opt '("著" "編" "訳" "述" "編著" "監修" "共著" "漫画" "写真")))
 
 (defconst ndlj-api--regexp-year
   "\\([0-9]\\{1,4\\}\\)\\(B\\. ?C\\.?\\|A\\. ?D\\.?\\)?")
@@ -130,16 +130,17 @@
 
 (defun ndlj-api-book-titles (title &optional series-title)
   "Parse TITLE and optionally SERIES-TITLE to get title and short title."
-  (let* ((short-title (or (and (string-match "\\( *[:：]+ *\\| +\\)" title)
-                               (ndlj-str-norm (substring title 0 (match-beginning 1))))
+  (let* ((title (replace-regexp-in-string " *： *" "：" (ndlj-str-norm title)))
+         (short-title (or (and (string-match "\\([：]\\| +\\)" title)
+                               (substring title 0 (match-beginning 1)))
                           title))
-         (series-title (when series-title
-                         (ndlj-str-norm series-title)))
-         (title (concat (replace-regexp-in-string " *: *" "：" (ndlj-str-norm title))
-                        (if series-title (concat "（" series-title "）") ""))))
-    (append (when title `((title . ,title)))
-            (when (and short-title (< (length short-title) (length title)))
-              `((short-title . ,short-title))))))
+         (series-title (when series-title (ndlj-str-norm series-title))))
+    (when series-title
+      (setq title (concat title "（" series-title "）")))
+    (ndlj-alist-keep-non-nil
+     `((title . ,title)
+       (short-title . ,(when (< (length short-title) (length title))
+                         short-title))))))
 
 (cl-defun ndlj-api-creators (&key creators series-creators entities)
   "Parse CREATORS and SERIES-CREATORS using ENTITIES."
