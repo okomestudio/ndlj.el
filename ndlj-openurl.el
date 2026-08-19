@@ -529,9 +529,17 @@ DPID maps to the query parameter 'ndl_dpid'."
            (when any `((any . (,any))))
            (when title `((btitle . (,title))))
            (when creator `((au . (,creator))))))
-         (url (ndlj-url-unparse :netloc ndlj-openurl-hostname
-                                :path ndlj-openurl-api-path
-                                :params query-params))
+         (request-url (ndlj-url-unparse :netloc ndlj-openurl-hostname
+                                        :path ndlj-openurl-api-path
+                                        :params query-params))
+         ;; Want to have a chance to modify URL parameters after the API
+         ;; resolver provides a resolved URL:
+         (url (with-ndlj-url-retrieve-html request-url
+                (let* ((url-st (ndlj-url-parse (url-recreate-url url-http-target-url)))
+                       (query-params (ndlj-url-params url-st)))
+                  (setf (map-elt query-params "collapse") '("none"))
+                  (setf (ndlj-url-params url-st) query-params)
+                  (ndlj-url-unparse :url url-st))))
          all-items)
     (while
         (pcase-let*
