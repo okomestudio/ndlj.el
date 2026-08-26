@@ -52,6 +52,7 @@
                ("共著" . ("author"))
                ("漫画" . ("author"))
                ("写真" . ("author"))
+               ("訳注" . ("translator"))
                ("シリーズ編" . ("seriesEditor"))))))
 
 (defun ndlj-zotero-date-render (date)
@@ -90,7 +91,7 @@
                              (ndlj-message "Unknown role: %s" role)
                              `(,role))
                          (ndlj-message "Missing role for: %s" rec)
-                         "author"))
+                         '("author")))
         (name (map-elt rec 'fullname))
         (last-name (map-elt rec 'surname))
         (first-name (map-elt rec 'given-name)))
@@ -153,7 +154,7 @@
         :numPages ,(map-elt rec 'num-pages)
         :isbn ,(map-elt rec 'isbn)
         :language ,(ndlj-zotero-language-render (map-elt rec 'language))
-        :libraryCatalog "NDL Search"
+        :libraryCatalog ,(map-elt rec 'library-catalog)
         :callNumber ,(map-elt rec 'call-number)
         :extra ,(ndlj-zotero-extra-render
                  (map-merge

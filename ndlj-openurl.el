@@ -365,14 +365,12 @@
                   ("NDLRepoID" . ,(map-elt (ndlj-api-url-parse item-url) 'repo-id)))))
       ))))
 
-(defun ndlj-openurl-book-extract-plus (start end)
-  (let* ((dom (ndlj-url-retrieve-as-html start end))
-         (abst (ndlj-openurl-extract-from-abstract-area dom))
+(defun ndlj-openurl-book-extract-plus (dom)
+  (let* ((abst (ndlj-openurl-extract-from-abstract-area dom))
          (recs (ndlj-openurl-extract-fields dom))
          (rec (map-elt recs "紙")))
     (ndlj-alist-keep-non-nil
-     `((dom . ,dom)
-       (ndc8 . ,(map-elt rec "NDC8版"))
+     `((ndc8 . ,(map-elt rec "NDC8版"))
        (ndc9 . ,(map-elt rec "NDC9版"))
        (ndc10 . ,(map-elt rec "NDC10版"))
        (note-general . ,(map-elt rec "一般注記"))
@@ -395,16 +393,13 @@
                                        (string-prefix-p sum-digital sum-paper))
                             sum-digital)))))))))
 
-(defun ndlj-openurl-book-item-get (search-result-item)
+(defun ndlj-openurl-book-item-create (dom)
   "Get an item as alist from SEARCH-RESULT-ITEM."
-  (let* ((item-url (map-elt search-result-item 'item-url))
-         (rec (with-ndlj-url-retrieve-html item-url
-                (ndlj-openurl-extract-fields dom))))
-    (seq-filter
-     #'cdr
+  (let* ((recs (ndlj-openurl-extract-fields dom))
+         (rec (map-elt recs "紙")))
+    (ndlj-alist-keep-non-nil
      (append
-      `((ndl:item-url . ,item-url)
-        (material-type . ,(map-elt rec "資料種別")))
+      `((material-type . ,(map-elt rec "資料種別")))
       (let-alist (ndlj-api-book-titles (map-elt rec "タイトル")
                                        (map-elt rec "シリーズタイトル"))
         `((title . ,.title)
@@ -427,6 +422,7 @@
                             (map-elt it "数量"))))
         (isbn . ,(map-elt rec "ISBN"))
         (language . ,(map-elt rec "本文の言語コード"))
+        (library-catalog . ,(map-elt rec "所蔵機関"))
         (call-number . ,(map-elt rec "請求記号"))
         (extra . ,(ndlj-openurl-book-extra rec))
         (tags . ,(ndlj-openurl-book-tags rec)))))))
@@ -439,7 +435,10 @@
      ((seq-intersection '("記事") material-types)
       (ndlj-openurl-magazine-article-item-get search-result-item))
      ((seq-intersection '("図書") material-types)
-      (ndlj-openurl-book-item-get search-result-item))
+      (let* ((item-url (map-elt search-result-item 'item-url))
+             (dom (with-ndlj-url-retrieve-html item-url
+                    dom)))
+        (ndlj-openurl-book-item-create dom)))
      (t (ndlj-message "Unknwon material types: '%s'" material-types)))))
 
 ;;; Search Query

@@ -127,62 +127,58 @@ REPO-ITEM-ID is of form `R<number>-I<number>'."
                                                         :reducer nil)))))
           (ndlj-dom-by-path dom 'dcndl:partInformation :fun nil :reducer nil)))
 
-(defun ndlj-oaipmh-book-item-get (search-result-item)
-  (let* ((item-url (map-elt search-result-item 'item-url))
-         (repo-item-url (ndlj-oaipmh-url-get-record
-                         (map-elt search-result-item 'repo-item-id)))
-         (results (ndlj-url-retrieve-gather
-                   `((,repo-item-url . ndlj-url-retrieve-as-xml)
-                     (,item-url . ndlj-openurl-book-extract-plus))))
-         (rec (dom-by-tag (plist-get (nth 0 results) :value) 'record))
-         (openurl (plist-get (nth 1 results) :value)))
-    (ndlj-alist-keep-non-nil
-     (append
-      `((ndl:item-url . ,item-url)
-        (material-type . ,(ndlj-dom-by-path-attr rec 'dcndl:materialType 'rdfs:label)))
-      (let-alist (ndlj-api-book-titles (ndlj-dom-by-path rec '(dc:title rdf:value)))
-        `((title . ,.title)
-          (short-title . ,.short-title)))
-      `((volume . ,(ndlj-dom-by-path rec '(dcndl:volume rdf:value)))
-        (creators
-         . ,(ndlj-api-creators
-             :creators
-             (seq-keep (lambda (it)
-                         ;; Only keep direct children of BibResource;
-                         ;; otherwise, creators may be fetched from part
-                         ;; information.
-                         (when (eq (car (dom-parent rec it)) 'dcndl:BibResource)
-                           (dom-inner-text it)))
-                       (dom-by-tag rec 'dc:creator))
-             :series-creators (ndlj-dom-by-path rec 'dcndl:seriesCreator :reducer nil)
-             :entities (ndlj-dom-by-path rec '(dcterms:creator foaf:name) :reducer nil))))
-      (let-alist (ndlj-api-book-series
-                  (ndlj-dom-by-path rec '(dcndl:seriesTitle rdf:value)))
-        (append (when .series `((series . ,.series)))
-                (when .series-number `((series-number . ,.series-number)))))
-      `((edition . ,(ndlj-dom-by-path rec 'dcndl:edition))
-        (publisher . ,(ndlj-dom-by-path rec '(dcterms:publisher foaf:name)))
-        (place . ,(ndlj-dom-by-path rec '(dcterms:publisher dcndl:location)))
-        (date . ,(ndlj-api-date-from-str (ndlj-dom-by-path rec 'dcterms:date))))
-      (when-let* ((s (ndlj-dom-by-path rec 'dcterms:extent))
-                  (_ (string-match "\\([0-9]+\\)\\s-?p" s))
-                  (num-pages (match-string 1 s)))
-        `((num-pages . ,num-pages)))
-      `((isbn . ,(ndlj-dom-by-tag-by-attr rec 'dcterms:identifier 'rdf:datatype
-                                          "\\`http://ndl.go.jp/dcndl/terms/ISBN\\'"))
-        (language . ,(ndlj-dom-by-path rec 'dcterms:language))
-        (call-number . ,(ndlj-dom-by-path rec 'dcndl:callNumber))
-        (parts . ,(ndlj-oaipmh-book-parts rec))
-        (ndlsh . ,(ndlj-oaipmh-ndlsh rec))
-        (ndlc . ,(ndlj-oaipmh-ndlc rec))
-        (ndc8 . ,(or (map-elt openurl 'ndc8) (ndlj-oaipmh-ndc rec 8)))
-        (ndc9 . ,(or (map-elt openurl 'ndc9) (ndlj-oaipmh-ndc rec 9)))
-        (ndc10 . ,(or (map-elt openurl 'ndc10) (ndlj-oaipmh-ndc rec 10)))
-        (ndl-bib-id . ,(ndlj-oaipmh-ndl-bib-id rec))
-        (ndl-repo-id . ,(ndlj-oaipmh-ndl-repo-id rec))
-        (note-general . ,(map-elt openurl 'note-general))
-        (index . ,(map-elt openurl 'index))
-        (summary . ,(map-elt openurl 'summary)))))))
+(defun ndlj-oaipmh-book-item-create (dom-oaipmh dom-openurl)
+  (if-let* ((rec (dom-by-tag dom-oaipmh 'record)))
+      (let ((rec-extra (ndlj-openurl-book-extract-plus dom-openurl)))
+        (ndlj-alist-keep-non-nil
+         (append
+          `((material-type . ,(ndlj-dom-by-path-attr rec 'dcndl:materialType 'rdfs:label)))
+          (let-alist (ndlj-api-book-titles (ndlj-dom-by-path rec '(dc:title rdf:value)))
+            `((title . ,.title)
+              (short-title . ,.short-title)))
+          `((volume . ,(ndlj-dom-by-path rec '(dcndl:volume rdf:value)))
+            (creators
+             . ,(ndlj-api-creators
+                 :creators
+                 (seq-keep (lambda (it)
+                             ;; Only keep direct children of BibResource;
+                             ;; otherwise, creators may be fetched from part
+                             ;; information.
+                             (when (eq (car (dom-parent rec it)) 'dcndl:BibResource)
+                               (dom-inner-text it)))
+                           (dom-by-tag rec 'dc:creator))
+                 :series-creators (ndlj-dom-by-path rec 'dcndl:seriesCreator :reducer nil)
+                 :entities (ndlj-dom-by-path rec '(dcterms:creator foaf:name) :reducer nil))))
+          (let-alist (ndlj-api-book-series
+                      (ndlj-dom-by-path rec '(dcndl:seriesTitle rdf:value)))
+            (append (when .series `((series . ,.series)))
+                    (when .series-number `((series-number . ,.series-number)))))
+          `((edition . ,(ndlj-dom-by-path rec 'dcndl:edition))
+            (publisher . ,(ndlj-dom-by-path rec '(dcterms:publisher foaf:name)))
+            (place . ,(ndlj-dom-by-path rec '(dcterms:publisher dcndl:location)))
+            (date . ,(ndlj-api-date-from-str (ndlj-dom-by-path rec 'dcterms:date))))
+          (when-let* ((s (ndlj-dom-by-path rec 'dcterms:extent))
+                      (_ (string-match "\\([0-9]+\\)\\s-?p" s))
+                      (num-pages (match-string 1 s)))
+            `((num-pages . ,num-pages)))
+          `((isbn . ,(ndlj-dom-by-tag-by-attr rec 'dcterms:identifier 'rdf:datatype
+                                              "\\`http://ndl.go.jp/dcndl/terms/ISBN\\'"))
+            (language . ,(ndlj-dom-by-path rec 'dcterms:language))
+            (library-catalog . ,(ndlj-dom-by-path rec '(dcndl:holdingAgent foaf:name)))
+            (call-number . ,(ndlj-dom-by-path rec 'dcndl:callNumber))
+            (parts . ,(ndlj-oaipmh-book-parts rec))
+            (ndlsh . ,(ndlj-oaipmh-ndlsh rec))
+            (ndlc . ,(ndlj-oaipmh-ndlc rec))
+            (ndc8 . ,(or (map-elt rec-extra 'ndc8) (ndlj-oaipmh-ndc rec 8)))
+            (ndc9 . ,(or (map-elt rec-extra 'ndc9) (ndlj-oaipmh-ndc rec 9)))
+            (ndc10 . ,(or (map-elt rec-extra 'ndc10) (ndlj-oaipmh-ndc rec 10)))
+            (ndl-bib-id . ,(ndlj-oaipmh-ndl-bib-id rec))
+            (ndl-repo-id . ,(ndlj-oaipmh-ndl-repo-id rec))
+            (note-general . ,(map-elt rec-extra 'note-general))
+            (index . ,(map-elt rec-extra 'index))
+            (summary . ,(map-elt rec-extra 'summary))))))
+    (ndlj-message "No OAI-PMH API record found; falling back to OpenURL")
+    (ndlj-openurl-book-item-create dom-openurl)))
 
 ;;;###autoload
 (defun ndlj-oaipmh-bib-item-get (search-result-item)
@@ -192,7 +188,14 @@ REPO-ITEM-ID is of form `R<number>-I<number>'."
      ((seq-intersection '("記事") material-types)
       (ndlj-oaipmh-magazine-article-item-get search-result-item))
      ((seq-intersection '("図書") material-types)
-      (ndlj-oaipmh-book-item-get search-result-item))
+      (let* ((item-url (map-elt search-result-item 'item-url))
+             (repo-item-url (ndlj-oaipmh-url-get-record (map-elt search-result-item 'repo-item-id)))
+             (results (ndlj-url-retrieve-gather
+                       `((,repo-item-url . ndlj-url-retrieve-as-xml)
+                         (,item-url . ndlj-url-retrieve-as-html))))
+             (dom-oaipmh (plist-get (nth 0 results) :value))
+             (dom-openurl (plist-get (nth 1 results) :value)))
+        (ndlj-oaipmh-book-item-create dom-oaipmh dom-openurl)))
      (t (ndlj-message "Unknwon material types: '%s'" material-types)))))
 
 (provide 'ndlj-oaipmh)
