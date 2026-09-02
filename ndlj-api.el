@@ -33,7 +33,7 @@
 (require 'ndlj-util)
 
 (defconst ndlj-api-regexp-roles
-  (regexp-opt '("著" "編" "訳" "述" "編著" "監修" "共著" "漫画" "原作" "写真" "訳注")))
+  (regexp-opt '("著" "編" "訳" "述" "編著" "監修" "共著" "漫画" "原作" "作画" "写真" "訳注")))
 
 (defconst ndlj-api--regexp-year
   "\\([0-9]\\{1,4\\}\\)\\(B\\. ?C\\.?\\|A\\. ?D\\.?\\)?")
