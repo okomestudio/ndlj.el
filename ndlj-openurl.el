@@ -439,7 +439,7 @@
              (dom (with-ndlj-url-retrieve-html item-url
                     dom)))
         (ndlj-openurl-book-item-create dom)))
-     (t (ndlj-message "Unknwon material types: '%s'" material-types)))))
+     (t (ndlj-message "Unknown material types: '%s'" material-types)))))
 
 ;;; Search Query
 

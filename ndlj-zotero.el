@@ -110,6 +110,121 @@
                           (seq-filter #'cdr alis))
                "\n"))
 
+(defun ndlj-zotero-extra (rec)
+  (map-merge
+   'alist
+   (seq-map-indexed
+    (lambda (it idx)
+      (let ((key (format "NDLSH_%d" idx))
+            (id (map-elt it 'id))
+            (subject (map-elt it 'subject)))
+        `(,key . ,(concat (if id (format "[%s] " id) "")
+                          subject))))
+    (map-elt rec 'ndlsh))
+   `(("NDLC" . ,(map-elt rec 'ndlc))
+     ("NDC8" . ,(map-elt rec 'ndc8))
+     ("NDC9" . ,(map-elt rec 'ndc9))
+     ("NDC10" . ,(map-elt rec 'ndc10))
+     ("NDLBibID" . ,(map-elt rec 'ndl-bib-id))
+     ("NDLRepoID" . ,(map-elt rec 'ndl-repo-id)))))
+
+(defun ndlj-zotero-abstract (rec)
+  (string-join
+   (delq nil
+         (list
+          (when-let ((articles (map-elt rec 'articles)))
+            (concat "【記事】\n"
+                    (string-join (mapcar #'ndlj-str-norm articles) "\n")))
+          (when-let ((summary (map-elt rec 'summary)))
+            (concat "【要約】\n"
+                    (string-join (mapcar #'ndlj-str-norm summary) "\n────\n")))
+          (when-let ((index (map-elt rec 'index)))
+            (concat "【目次】\n" (ndlj-str-norm index)))
+          (when-let ((parts (map-elt rec 'parts)))
+            (concat "【内容細目】\n"
+                    (mapconcat
+                     (pcase-lambda ((map title creators))
+                       (format "%s ／ %s" (ndlj-str-norm title)
+                               (mapconcat
+                                (pcase-lambda ((map fullname role))
+                                  (format "%s（%s）" fullname role))
+                                creators "")))
+                     parts "\n")))
+          (when-let ((note-general (map-elt rec 'note-general)))
+            (concat "【一般注記】\n" (ndlj-str-norm note-general)))))
+   "\n\n"))
+
+(defun ndlj-zotero-tags (rec)
+  (cl-map 'vector
+          (lambda (tag) `( :tag ,tag ))
+          (seq-uniq
+           (flatten-list
+            (append
+             (mapcar
+              (lambda (str)
+                (when (stringp str)
+                  (cdr (string-split str "\\([.]? \\|--\\)" t "\\s-+"))))
+              `(,(map-elt rec 'ndc9) ,(map-elt rec 'ndc10)))
+             (mapcar
+              (lambda (it)
+                (cond ((map-elt it 'fullname)
+                       (map-elt it 'fullname))
+                      ((and (map-elt it 'surname) (map-elt it 'given-name))
+                       (concat (map-elt it 'surname) " " (map-elt it 'given-name)))
+                      (t
+                       (ndlj-api-tags-from-topic (map-elt it 'subject)))))
+              (map-elt rec 'ndlsh)))))))
+
+(defun ndlj-zotero-item-book (rec)
+  "Transform a record dom REC into a Zotero book item."
+  (let ((item-type "book"))
+    (ndlj-zotero-keep-non-nil
+     `( :itemType ,item-type
+        :title ,(map-elt rec 'title)
+        :shortTitle ,(map-elt rec 'short-title)
+        :volume ,(map-elt rec 'volume)
+        :creators ,(seq-mapcat (apply-partially #'ndlj-zotero-creator-render item-type)
+                               (map-elt rec 'creators)
+                               'vector)
+        :series ,(map-elt rec 'series)
+        :seriesNumber ,(map-elt rec 'series-number)
+        :edition ,(map-elt rec 'edition)
+        :publisher ,(map-elt rec 'publisher)
+        :place ,(map-elt rec 'place)
+        :date ,(ndlj-zotero-date-render (map-elt rec 'date))
+        :numPages ,(map-elt rec 'num-pages)
+        :isbn ,(map-elt rec 'isbn)
+        :language ,(ndlj-zotero-language-render (map-elt rec 'language))
+        :libraryCatalog ,(map-elt rec 'library-catalog)
+        :callNumber ,(map-elt rec 'call-number)
+        :extra ,(ndlj-zotero-extra-render (ndlj-zotero-extra rec))
+        :abstractNote ,(ndlj-zotero-abstract rec)
+        :tags ,(ndlj-zotero-tags rec)))))
+
+(defun ndlj-zotero-item-magazine (rec)
+  "Transform a record dom REC into a Zotero magazineArticle item."
+  (let ((item-type "magazineArticle"))
+    (ndlj-zotero-keep-non-nil
+     `( :itemType ,item-type
+        :title ,(map-elt rec 'title)
+        :shortTitle ,(map-elt rec 'short-title)
+        :creators ,(seq-mapcat (apply-partially #'ndlj-zotero-creator-render item-type)
+                               (map-elt rec 'creators)
+                               'vector)
+        :publicationTitle ,(map-elt rec 'publication-title)
+        :publisher ,(map-elt rec 'publisher)
+        :place ,(map-elt rec 'place)
+        :date ,(ndlj-zotero-date-render (map-elt rec 'date))
+        :volume ,(map-elt rec 'volume)
+        :issue ,(map-elt rec 'issue)
+        :pages ,(map-elt rec 'pages)
+        :language ,(ndlj-zotero-language-render (map-elt rec 'language))
+        :libraryCatalog ,(map-elt rec 'library-catalog)
+        :callNumber ,(map-elt rec 'call-number)
+        :extra ,(ndlj-zotero-extra-render (ndlj-zotero-extra rec))
+        :abstractNote ,(ndlj-zotero-abstract rec)
+        :tags ,(ndlj-zotero-tags rec)))))
+
 (defun ndlj-zotero-item-magazine-article (rec)
   "Transform a record dom REC into a Zotero magazineArticle item."
   (let ((item-type "magazineArticle"))
@@ -136,89 +251,6 @@
         :extra ,(ndlj-zotero-extra-render (map-elt rec 'extra))
         :tags nil))))
 
-(defun ndlj-zotero-item-book (rec)
-  "Transform a record dom REC into a Zotero book item."
-  (let ((item-type "book"))
-    (ndlj-zotero-keep-non-nil
-     `( :itemType ,item-type
-        :title ,(map-elt rec 'title)
-        :shortTitle ,(map-elt rec 'short-title)
-        :volume ,(map-elt rec 'volume)
-        :creators ,(seq-mapcat (apply-partially #'ndlj-zotero-creator-render item-type)
-                               (map-elt rec 'creators)
-                               'vector)
-        :series ,(map-elt rec 'series)
-        :seriesNumber ,(map-elt rec 'series-number)
-        :edition ,(map-elt rec 'edition)
-        :publisher ,(map-elt rec 'publisher)
-        :place ,(map-elt rec 'place)
-        :date ,(ndlj-zotero-date-render (map-elt rec 'date))
-        :numPages ,(map-elt rec 'num-pages)
-        :isbn ,(map-elt rec 'isbn)
-        :language ,(ndlj-zotero-language-render (map-elt rec 'language))
-        :libraryCatalog ,(map-elt rec 'library-catalog)
-        :callNumber ,(map-elt rec 'call-number)
-        :extra ,(ndlj-zotero-extra-render
-                 (map-merge
-                  'alist
-                  (seq-map-indexed
-                   (lambda (it idx)
-                     (let ((key (format "NDLSH_%d" idx))
-                           (id (map-elt it 'id))
-                           (subject (map-elt it 'subject)))
-                       `(,key . ,(concat (if id (format "[%s] " id) "")
-                                         subject))))
-                   (map-elt rec 'ndlsh))
-                  `(("NDLC" . ,(map-elt rec 'ndlc))
-                    ("NDC8" . ,(map-elt rec 'ndc8))
-                    ("NDC9" . ,(map-elt rec 'ndc9))
-                    ("NDC10" . ,(map-elt rec 'ndc10))
-                    ("NDLBibID" . ,(map-elt rec 'ndl-bib-id))
-                    ("NDLRepoID" . ,(map-elt rec 'ndl-repo-id)))))
-        :abstractNote
-        ,(string-join
-          (delq nil
-                (list
-                 (when-let ((summary (map-elt rec 'summary)))
-                   (concat "【要約】\n"
-                           (string-join (mapcar #'ndlj-str-norm summary) "\n────\n")))
-                 (when-let ((index (map-elt rec 'index)))
-                   (concat "【目次】\n" (ndlj-str-norm index)))
-                 (when-let ((parts (map-elt rec 'parts)))
-                   (concat "【内容細目】\n"
-                           (mapconcat
-                            (pcase-lambda ((map title creators))
-                              (format "%s ／ %s" (ndlj-str-norm title)
-                                      (mapconcat
-                                       (pcase-lambda ((map fullname role))
-                                         (format "%s（%s）" fullname role))
-                                       creators "")))
-                            parts "\n")))
-                 (when-let ((note-general (map-elt rec 'note-general)))
-                   (concat "【一般注記】\n" (ndlj-str-norm note-general)))))
-          "\n\n")
-        :tags
-        ,(cl-map 'vector
-                 (lambda (tag) `( :tag ,tag ))
-                 (seq-uniq
-                  (flatten-list
-                   (append
-                    (mapcar
-                     (lambda (str)
-                       (when (stringp str)
-                         (cdr (string-split str "\\([.]? \\|--\\)" t "\\s-+"))))
-                     `(,(map-elt rec 'ndc9) ,(map-elt rec 'ndc10)))
-                    (mapcar
-                     (lambda (it)
-                       (cond ((map-elt it 'fullname)
-                              (map-elt it 'fullname))
-                             ((and (map-elt it 'surname) (map-elt it 'given-name))
-                              (concat (map-elt it 'surname) " " (map-elt it 'given-name)))
-                             (t
-                              (ndlj-api-tags-from-topic (map-elt it 'subject)))))
-                     (map-elt rec 'ndlsh))))))
-        ))))
-
 ;;; Interactive Commands
 
 ;;;###autoload
@@ -230,10 +262,12 @@
     (when ndlj-debug
       (pp item))
     (let* ((fun (cond
-                 ((member material-type '("記事" "記事・論文"))
-                  #'ndlj-zotero-item-magazine-article)
                  ((member material-type '("図書"))
                   #'ndlj-zotero-item-book)
+                 ((member material-type '("雑誌"))
+                  #'ndlj-zotero-item-magazine)
+                 ((member material-type '("記事" "記事・論文"))
+                  #'ndlj-zotero-item-magazine-article)
                  (t #'identity)))
            (json (funcall fun item)))
       (when ndlj-debug

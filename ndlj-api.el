@@ -180,6 +180,20 @@
           (series-number . ,(cdr parts)) )
       `((series . ,str)))))
 
+(defun ndlj-api-magazine-volume-issue (str)
+  (let ((volume (and (string-match "\\([0-9]+\\)巻" str) (match-string 1 str)))
+        (issue (and (string-match "\\([0-9]+\\)号" str) (match-string 1 str)))
+        (year (and (string-match "\\([0-9]+\\)年" str) (match-string 1 str)))
+        (month (and (string-match "\\([0-9]+\\)月" str) (match-string 1 str)))
+        (day (and (string-match "\\([0-9]+\\)日" str) (match-string 1 str))))
+    (append
+     (when volume `((volume . ,volume)))
+     (when issue `((issue . ,issue)))
+     (when (or year month day)
+       `((date . ,(make-decoded-time :year (when year (string-to-number year))
+                                     :month (when month (string-to-number month))
+                                     :day (when day (string-to-number day)))))))))
+
 (defun ndlj-api-url-parse (url)
   (when-let* ((urlobj (ndlj-url-parse url))
               (path (ndlj-url-path urlobj))

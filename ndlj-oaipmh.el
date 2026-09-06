@@ -4,18 +4,18 @@
 ;;
 ;;; License:
 ;;
-;; This program is free software; you can redistribute it and/or modify it under
-;; the terms of the GNU General Public License as published by the Free Software
-;; Foundation, either version 3 of the License, or (at your option) any later
-;; version.
+;; This program is free software; you can redistribute it and/or modify
+;; it under the terms of the GNU General Public License as published by
+;; the Free Software Foundation, either version 3 of the License, or (at
+;; your option) any later version.
 ;;
-;; This program is distributed in the hope that it will be useful, but WITHOUT
-;; ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
-;; FOR A PARTICULAR PURPOSE. See the GNU General Public License for more
-;; details.
+;; This program is distributed in the hope that it will be useful, but
+;; WITHOUT ANY WARRANTY; without even the implied warranty of
+;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+;; General Public License for more details.
 ;;
-;; You should have received a copy of the GNU General Public License along with
-;; this program. If not, see <https://www.gnu.org/licenses/>.
+;; You should have received a copy of the GNU General Public License
+;; along with this program. If not, see <https://www.gnu.org/licenses/>.
 ;;
 ;;; Commentary:
 ;;
@@ -84,40 +84,6 @@ REPO-ITEM-ID is of form `R<number>-I<number>'."
        (_ (string-match resource s)))
     (match-string 1 s)))
 
-(defun ndlj-oaipmh-magazine-article-item-get (search-result-item)
-  (let* ((item-url (map-elt search-result-item 'item-url))
-         (repo-item-url (ndlj-oaipmh-url-get-record
-                         (map-elt search-result-item 'repo-item-id)))
-         (results (ndlj-url-retrieve-gather
-                   `((,repo-item-url . ndlj-url-retrieve-as-xml))))
-         (rec (dom-by-tag (plist-get (nth 0 results) :value) 'record)))
-    (ndlj-alist-keep-non-nil
-     (append
-      `((ndl:item-url . ,item-url)
-        (material-type . ,(ndlj-dom-by-path-attr rec 'dcndl:materialType 'rdfs:label)))
-      (let-alist (ndlj-api-book-titles
-                  (ndlj-dom-by-path rec '(dc:title rdf:value))
-                  (ndlj-dom-by-path rec '(dcndl:seriesTitle rdf:value)))
-        `((title . ,.title)
-          (short-title . ,.short-title)))
-      `((creators . ,(ndlj-api-creators
-                      :creators (ndlj-dom-by-path rec 'dc:creator :reducer nil)
-                      :entities (ndlj-dom-by-path rec '(dcterms:creator foaf:name) :reducer nil))))
-      (let-alist (ndlj-api-publisher-parse
-                  (ndlj-dom-by-path rec '(dcterms:publisher foaf:name)))
-        `((publisher . ,.publisher)
-          (place . ,.place)))
-      `((date . ,(ndlj-api-date-from-str (ndlj-dom-by-path rec 'dcterms:issued)))
-        (publication-title . ,(ndlj-dom-by-path rec '(dcndl:publicationName rdf:value)))
-        (volume . ,(ndlj-dom-by-path rec '(dcndl:publicationName dcndl:publicationVolume)))
-        (issue . ,(ndlj-dom-by-path rec '(dcndl:publicationName dcndl:number)))
-        (pages . ,(ndlj-dom-by-path rec '(dcndl:publicationName dcndl:pageRange)))
-        (language . ,(ndlj-dom-by-path rec 'dcterms:language))
-        (call-number . ,(ndlj-dom-by-path rec 'dcndl:callNumber))
-        (extra . (("NDLBibID" . ,(ndlj-oaipmh-ndl-bib-id rec))
-                  ("NDLRepoID" . ,(ndlj-oaipmh-ndl-repo-id rec)))))
-      ))))
-
 (defun ndlj-oaipmh-book-parts (dom)
   "Extract book parts information from DOM."
   (mapcar (lambda (node)
@@ -180,13 +146,77 @@ REPO-ITEM-ID is of form `R<number>-I<number>'."
     (ndlj-message "No OAI-PMH API record found; falling back to OpenURL")
     (ndlj-openurl-book-item-create dom-openurl)))
 
+(defun ndlj-oaipmh-magazine-item-create (dom-oaipmh dom-openurl)
+  (if-let* ((rec (dom-by-tag dom-oaipmh 'record)))
+      (let ((rec-extra (ndlj-openurl-book-extract-plus dom-openurl)))
+        (ndlj-alist-keep-non-nil
+         (append
+          `((material-type . ,(ndlj-dom-by-path-attr rec 'dcndl:materialType 'rdfs:label))
+            (title . ,(ndlj-str-norm (ndlj-dom-by-path rec 'dcterms:title)))
+            (short-title . ,(ndlj-str-norm (ndlj-dom-by-path rec '(dc:title rdf:value))))
+            (publication-title . ,(ndlj-str-norm (ndlj-dom-by-path rec '(dc:title rdf:value))))
+            (creators . ,(ndlj-api-creators
+                          :creators (ndlj-dom-by-path rec 'dc:creator :reducer nil)
+                          :entities (ndlj-dom-by-path rec '(dcterms:creator foaf:name) :reducer nil)))
+            (publisher . ,(ndlj-dom-by-path rec '(dcterms:publisher foaf:name)))
+            (place . ,(ndlj-dom-by-path rec '(dcterms:publisher dcndl:location))))
+          (let-alist (ndlj-api-magazine-volume-issue
+                      (ndlj-dom-by-path rec '(dcndl:volume rdf:value)))
+            `((date . ,.date)
+              (volume . ,.volume)
+              (issue . ,.issue)))
+          `((language . ,(ndlj-dom-by-path rec 'dcterms:language))
+            (library-catalog . ,(ndlj-dom-by-path rec '(dcndl:holdingAgent foaf:name)))
+            (call-number . ,(ndlj-dom-by-path rec 'dcndl:callNumber))
+            (ndc8 . ,(or (map-elt rec-extra 'ndc8) (ndlj-oaipmh-ndc rec 8)))
+            (ndc9 . ,(or (map-elt rec-extra 'ndc9) (ndlj-oaipmh-ndc rec 9)))
+            (ndc10 . ,(or (map-elt rec-extra 'ndc10) (ndlj-oaipmh-ndc rec 10)))
+            (ndl-bib-id . ,(ndlj-oaipmh-ndl-bib-id rec))
+            (ndl-repo-id . ,(ndlj-oaipmh-ndl-repo-id rec))
+            (note-general . ,(map-elt rec-extra 'note-general))
+            (index . ,(map-elt rec-extra 'index))
+            (summary . ,(map-elt rec-extra 'summary))
+            (articles . ,(ndlj-dom-by-path-attr rec 'dcterms:hasPart 'rdfs:label :reducer nil))))))))
+
+(defun ndlj-oaipmh-magazine-article-item-create (dom-oaipmh dom-openurl)
+  (let* ((item-url (map-elt search-result-item 'item-url))
+         (repo-item-url (ndlj-oaipmh-url-get-record
+                         (map-elt search-result-item 'repo-item-id)))
+         (results (ndlj-url-retrieve-gather
+                   `((,repo-item-url . ndlj-url-retrieve-as-xml))))
+         (rec (dom-by-tag (plist-get (nth 0 results) :value) 'record)))
+    (ndlj-alist-keep-non-nil
+     (append
+      `((ndl:item-url . ,item-url)
+        (material-type . ,(ndlj-dom-by-path-attr rec 'dcndl:materialType 'rdfs:label)))
+      (let-alist (ndlj-api-book-titles
+                  (ndlj-dom-by-path rec '(dc:title rdf:value))
+                  (ndlj-dom-by-path rec '(dcndl:seriesTitle rdf:value)))
+        `((title . ,.title)
+          (short-title . ,.short-title)))
+      `((creators . ,(ndlj-api-creators
+                      :creators (ndlj-dom-by-path rec 'dc:creator :reducer nil)
+                      :entities (ndlj-dom-by-path rec '(dcterms:creator foaf:name) :reducer nil))))
+      (let-alist (ndlj-api-publisher-parse
+                  (ndlj-dom-by-path rec '(dcterms:publisher foaf:name)))
+        `((publisher . ,.publisher)
+          (place . ,.place)))
+      `((date . ,(ndlj-api-date-from-str (ndlj-dom-by-path rec 'dcterms:issued)))
+        (publication-title . ,(ndlj-dom-by-path rec '(dcndl:publicationName rdf:value)))
+        (volume . ,(ndlj-dom-by-path rec '(dcndl:publicationName dcndl:publicationVolume)))
+        (issue . ,(ndlj-dom-by-path rec '(dcndl:publicationName dcndl:number)))
+        (pages . ,(ndlj-dom-by-path rec '(dcndl:publicationName dcndl:pageRange)))
+        (language . ,(ndlj-dom-by-path rec 'dcterms:language))
+        (call-number . ,(ndlj-dom-by-path rec 'dcndl:callNumber))
+        (extra . (("NDLBibID" . ,(ndlj-oaipmh-ndl-bib-id rec))
+                  ("NDLRepoID" . ,(ndlj-oaipmh-ndl-repo-id rec)))))
+      ))))
+
 ;;;###autoload
 (defun ndlj-oaipmh-bib-item-get (search-result-item)
   "Get an item as alist from SEARCH-RESULT-ITEM."
   (let ((material-types (map-elt search-result-item 'material-types)))
     (cond
-     ((seq-intersection '("記事") material-types)
-      (ndlj-oaipmh-magazine-article-item-get search-result-item))
      ((seq-intersection '("図書") material-types)
       (let* ((item-url (map-elt search-result-item 'item-url))
              (repo-item-url (ndlj-oaipmh-url-get-record (map-elt search-result-item 'repo-item-id)))
@@ -196,7 +226,25 @@ REPO-ITEM-ID is of form `R<number>-I<number>'."
              (dom-oaipmh (plist-get (nth 0 results) :value))
              (dom-openurl (plist-get (nth 1 results) :value)))
         (ndlj-oaipmh-book-item-create dom-oaipmh dom-openurl)))
-     (t (ndlj-message "Unknwon material types: '%s'" material-types)))))
+     ((seq-intersection '("雑誌") material-types)
+      (let* ((item-url (map-elt search-result-item 'item-url))
+             (repo-item-url (ndlj-oaipmh-url-get-record (map-elt search-result-item 'repo-item-id)))
+             (results (ndlj-url-retrieve-gather
+                       `((,repo-item-url . ndlj-url-retrieve-as-xml)
+                         (,item-url . ndlj-url-retrieve-as-html))))
+             (dom-oaipmh (plist-get (nth 0 results) :value))
+             (dom-openurl (plist-get (nth 1 results) :value)))
+        (ndlj-oaipmh-magazine-item-create dom-oaipmh dom-openurl)))
+     ((seq-intersection '("記事") material-types)
+      (let* ((item-url (map-elt search-result-item 'item-url))
+             (repo-item-url (ndlj-oaipmh-url-get-record (map-elt search-result-item 'repo-item-id)))
+             (results (ndlj-url-retrieve-gather
+                       `((,repo-item-url . ndlj-url-retrieve-as-xml)
+                         (,item-url . ndlj-url-retrieve-as-html))))
+             (dom-oaipmh (plist-get (nth 0 results) :value))
+             (dom-openurl (plist-get (nth 1 results) :value)))
+        (ndlj-oaipmh-magazine-article-item-create dom-oaipmh dom-openurl)))
+     (t (ndlj-message "Unknown material types: '%s'" material-types)))))
 
 (provide 'ndlj-oaipmh)
 ;;; ndlj-oaipmh.el ends here
