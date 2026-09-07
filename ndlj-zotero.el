@@ -55,6 +55,7 @@
                ("原作" . ("author"))
                ("写真" . ("author"))
                ("訳注" . ("translator"))
+               ("イラスト" . ("author"))
                ("シリーズ編" . ("seriesEditor"))))))
 
 (defun ndlj-zotero-date-render (date)
