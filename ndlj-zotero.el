@@ -52,6 +52,8 @@
                ("共著" . ("author"))
                ("漫画" . ("author"))
                ("作画" . ("author"))
+               ("作" . ("author"))
+               ("画" . ("author"))
                ("原作" . ("author"))
                ("写真" . ("author"))
                ("訳注" . ("translator"))
